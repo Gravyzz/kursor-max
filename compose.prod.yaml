@@ -1,0 +1,53 @@
+# Переопределение для работы с настоящим MAX на сервере с публичным доменом.
+# Подключается строкой в .env:  COMPOSE_FILE=compose.yaml:compose.prod.yaml
+# после чего запуск — той же командой: docker compose up --build -d
+#
+# Отличия от локального стенда: реальный Bot API, режим webhook через HTTPS (сертификат получает Caddy),
+# вход в мини-приложение только по подписанным initData, секреты обязательны, имитация MAX не запускается.
+
+x-prod-env: &prod-env
+  NODE_ENV: production
+  DEV_AUTH: "false"
+  REVIEW_API_KEY: ${REVIEW_API_KEY:-}
+  REVIEW_USER_ID: ${REVIEW_USER_ID:-9000000001}
+  DATABASE_URL: postgres://${POSTGRES_USER:-spravochnik}:${POSTGRES_PASSWORD:?Задайте POSTGRES_PASSWORD в .env}@db:5432/${POSTGRES_DB:-spravochnik}
+  BOT_TOKEN: ${BOT_TOKEN:?Задайте BOT_TOKEN в .env (токен бота из платформы для партнёров MAX)}
+  MAX_API_BASE_URL: ${MAX_API_BASE_URL:-https://platform-api2.max.ru}
+  BOT_MODE: ${BOT_MODE:-webhook}
+  PUBLIC_URL: ${PUBLIC_URL:?Задайте PUBLIC_URL в .env, например https://kursor.example.ru}
+  WEBHOOK_SECRET: ${WEBHOOK_SECRET:?Задайте WEBHOOK_SECRET в .env (openssl rand -hex 32)}
+  APP_SECRET: ${APP_SECRET:?Задайте APP_SECRET в .env (openssl rand -hex 32)}
+
+services:
+  db:
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Задайте POSTGRES_PASSWORD в .env}
+
+  migrate:
+    environment: *prod-env
+
+  api:
+    environment: *prod-env
+
+  bot:
+    environment: *prod-env
+    depends_on: !override
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    environment: *prod-env
+    depends_on: !override
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?Задайте SITE_ADDRESS в .env — домен, указывающий на сервер}
+    ports: !override
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+
+  max-mock:
+    profiles: ["mock"]

@@ -1,0 +1,31 @@
+{
+  "name": "@spravochnik/server",
+  "version": "1.0.0",
+  "description": "Курсор: бот, API мини-приложения и планировщик уведомлений",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsx watch src/index.ts all",
+    "start": "node dist/index.js",
+    "migrate": "tsx src/index.ts migrate",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --import tsx --test --test-concurrency=1 --test-reporter=spec test/*.test.ts"
+  },
+  "dependencies": {
+    "@fastify/rate-limit": "11.2.0",
+    "@maxhub/max-bot-api": "0.3.1",
+    "fastify": "5.12.5",
+    "pg": "8.23.0",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.3",
+    "@types/pg": "8.23.1",
+    "tsx": "4.23.13",
+    "typescript": "5.9.3"
+  }
+}

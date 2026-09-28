@@ -1,0 +1,42 @@
+# Входной веб-сервер Курсора.
+# SITE_ADDRESS=:8080            — локально, HTTP на порту 8080 (значение по умолчанию);
+# SITE_ADDRESS=kursor.example.ru — на сервере: HTTPS с автоматическим сертификатом Let's Encrypt.
+{
+	admin off
+}
+
+{$SITE_ADDRESS::8080} {
+	encode zstd gzip
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+
+	# REST API мини-приложения
+	handle /api/* {
+		reverse_proxy api:3000
+	}
+
+	# Обновления от MAX в режиме webhook (BOT_MODE=webhook)
+	handle /webhook/* {
+		reverse_proxy bot:3001
+	}
+
+	# Файлы сборки с хешем в имени: кешируются навсегда, отсутствующий файл — честный 404
+	handle /assets/* {
+		root * /srv
+		header Cache-Control "public, max-age=31536000, immutable"
+		file_server
+	}
+
+	# Мини-приложение (SPA). X-Frame-Options не выставляем:
+	# веб-версия MAX открывает мини-приложение во встроенном фрейме.
+	handle {
+		root * /srv
+		header Cache-Control "no-cache"
+		try_files {path} /index.html
+		file_server
+	}
+}

@@ -1,0 +1,13 @@
+{
+  "name": "@spravochnik/max-mock",
+  "version": "1.0.0",
+  "description": "Курсор: имитация MAX Bot API для офлайн-проверки (только локальный профиль)",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.mjs"
+  }
+}

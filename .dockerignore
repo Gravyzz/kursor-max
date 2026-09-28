@@ -1,0 +1,21 @@
+# Контекст сборки всех образов — корень репозитория.
+# В образ попадают только файлы, явно скопированные в Dockerfile; здесь отсекаем тяжёлое и секретное.
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+**/.vite
+**/coverage
+**/npm-debug.log*
+**/.DS_Store
+.git
+.gitignore
+.github
+.idea
+.vscode
+.env
+.env.*
+docs
+data
+presentation
+**/*.md
+compose*.yaml

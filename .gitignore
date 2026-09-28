@@ -1,0 +1,26 @@
+# Зависимости и сборка
+node_modules/
+dist/
+*.tsbuildinfo
+.vite/
+coverage/
+
+# Секреты и локальные настройки (примеры *.example коммитятся)
+.env
+.env.local
+.env.*.local
+.env.production
+
+# Логи и системный мусор
+npm-debug.log*
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Скриншоты сквозного теста демо
+apps/demo/test/e2e-output/
+
+# Закрытый комплект сдачи: презентация и временный ключ проверки API
+release/

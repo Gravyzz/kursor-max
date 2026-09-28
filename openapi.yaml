@@ -1,0 +1,391 @@
+openapi: 3.1.0
+info:
+  title: API Курсора
+  version: 1.0.0
+  description: |
+    API конструктора факультетских справочников в MAX. Пользовательское приложение
+    передаёт подписанные данные запуска MAX. Для автоматической проверки жюри может
+    быть включён отдельный ключ, ведущий только в модельную демо-песочницу.
+servers:
+  - url: https://kursor.139-100-236-88.sslip.io
+    description: Стенд хакатона
+  - url: http://localhost:8080
+    description: Локальный Docker-стенд
+tags:
+  - name: System
+  - name: Demo
+  - name: Reader
+  - name: Editor
+security:
+  - MaxInitData: []
+  - ReviewKey: []
+paths:
+  /api/health:
+    get:
+      tags: [System]
+      summary: Проверить доступность API и базы
+      security: []
+      responses:
+        '200':
+          description: Сервис готов
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, time]
+                properties:
+                  ok: { type: boolean, const: true }
+                  time: { type: string, format: date-time }
+        '500': { $ref: '#/components/responses/Error' }
+  /api/config:
+    get:
+      tags: [System]
+      summary: Получить безопасные публичные флаги стенда
+      security: []
+      responses:
+        '200':
+          description: Настройки возможностей
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [demoEnabled, devAuth, reviewAuth]
+                properties:
+                  demoEnabled: { type: boolean }
+                  devAuth: { type: boolean }
+                  reviewAuth: { type: boolean }
+  /api/me:
+    get:
+      tags: [Reader]
+      summary: Профиль, роли и выбранный справочник
+      responses:
+        '200':
+          description: Текущий пользователь
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { $ref: '#/components/responses/Error' }
+  /api/demo:
+    post:
+      tags: [Demo]
+      summary: Создать заново личную демо-песочницу
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                role: { type: string, enum: [student, editor, dean], default: dean }
+      responses:
+        '200':
+          description: Идентификаторы созданного демо
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [universityId, handbookId, handbookSlug, role]
+                properties:
+                  universityId: { type: string, format: uuid }
+                  instituteId: { type: string, format: uuid }
+                  handbookId: { type: string, format: uuid }
+                  handbookSlug: { type: string }
+                  role: { type: string, enum: [student, editor, dean] }
+                additionalProperties: true
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /api/demo/role:
+    post:
+      tags: [Demo]
+      summary: Сменить роль в демо без потери изменений
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role: { type: string, enum: [student, editor, dean] }
+      responses:
+        '200':
+          description: Новая роль
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '400': { $ref: '#/components/responses/Error' }
+  /api/handbooks:
+    get:
+      tags: [Reader]
+      summary: Список доступных публичных справочников
+      parameters:
+        - in: query
+          name: mine
+          schema: { type: string, enum: ['1', 'true'] }
+          description: Ограничить справочниками своего вуза
+      responses:
+        '200':
+          description: Справочники
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [handbooks]
+                properties:
+                  handbooks: { type: array, items: { type: object, additionalProperties: true } }
+  /api/handbook:
+    get:
+      tags: [Reader]
+      summary: Главная выбранного справочника
+      parameters:
+        - $ref: '#/components/parameters/HandbookId'
+      responses:
+        '200':
+          description: Содержимое главной
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '404': { $ref: '#/components/responses/Error' }
+  /api/handbook/sections:
+    get:
+      tags: [Reader]
+      summary: Опубликованные разделы и страницы
+      parameters:
+        - $ref: '#/components/parameters/HandbookId'
+      responses:
+        '200':
+          description: Структура справочника
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sections]
+                properties:
+                  sections: { type: array, items: { type: object, additionalProperties: true } }
+  /api/handbook/search:
+    get:
+      tags: [Reader]
+      summary: Полнотекстовый поиск по опубликованным страницам
+      parameters:
+        - $ref: '#/components/parameters/HandbookId'
+        - in: query
+          name: q
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 120 }
+      responses:
+        '200':
+          description: Результаты поиска
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [query, hits]
+                properties:
+                  query: { type: string }
+                  hits: { type: array, items: { type: object, additionalProperties: true } }
+        '400': { $ref: '#/components/responses/Error' }
+  /api/handbook/deadlines:
+    get:
+      tags: [Reader]
+      summary: Ближайшие сроки
+      parameters:
+        - $ref: '#/components/parameters/HandbookId'
+      responses:
+        '200':
+          description: Сроки
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deadlines]
+                properties:
+                  deadlines: { type: array, items: { type: object, additionalProperties: true } }
+  /api/handbook/questions:
+    get:
+      tags: [Reader]
+      summary: Вопросы текущего читателя
+      parameters:
+        - $ref: '#/components/parameters/HandbookId'
+      responses:
+        '200':
+          description: Вопросы
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [questions]
+                properties:
+                  questions: { type: array, items: { type: object, additionalProperties: true } }
+    post:
+      tags: [Reader]
+      summary: Задать вопрос дежурному редактору
+      parameters:
+        - $ref: '#/components/parameters/HandbookId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text: { type: string, minLength: 5, maxLength: 1000 }
+                query: { type: [string, 'null'], maxLength: 120 }
+      responses:
+        '200':
+          description: Вопрос зарегистрирован
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '400': { $ref: '#/components/responses/Error' }
+  /api/handbook-editor/structure:
+    get:
+      tags: [Editor]
+      summary: Разделы, страницы, черновики и статусы редактора
+      parameters:
+        - $ref: '#/components/parameters/HandbookId'
+      responses:
+        '200':
+          description: Структура редактора
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [handbook, role, sections]
+                properties:
+                  handbook: { type: object, additionalProperties: true }
+                  role: { type: string, enum: [admin, editor] }
+                  sections: { type: array, items: { type: object, additionalProperties: true } }
+        '403': { $ref: '#/components/responses/Error' }
+  /api/handbook-editor/sections:
+    post:
+      tags: [Editor]
+      summary: Создать раздел (администратор)
+      parameters:
+        - $ref: '#/components/parameters/HandbookId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: { type: string, minLength: 2, maxLength: 80 }
+                emoji: { type: string, maxLength: 8 }
+                summary: { type: [string, 'null'], maxLength: 200 }
+                visible: { type: boolean, default: true }
+      responses:
+        '200':
+          description: Созданный раздел
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id]
+                properties:
+                  id: { type: string, format: uuid }
+        '403': { $ref: '#/components/responses/Error' }
+  /api/handbook-editor/pages:
+    post:
+      tags: [Editor]
+      summary: Создать страницу-черновик
+      parameters:
+        - $ref: '#/components/parameters/HandbookId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sectionId, title]
+              properties:
+                sectionId: { type: string, format: uuid }
+                title: { type: string, minLength: 3, maxLength: 120 }
+                summary: { type: [string, 'null'], maxLength: 300 }
+                blocks: { type: array, items: { type: object, additionalProperties: true } }
+      responses:
+        '200':
+          description: Созданная страница
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id]
+                properties:
+                  id: { type: string, format: uuid }
+        '400': { $ref: '#/components/responses/Error' }
+  /api/handbook-editor/pages/{id}/publish:
+    post:
+      tags: [Editor]
+      summary: Опубликовать страницу (администратор)
+      parameters:
+        - $ref: '#/components/parameters/HandbookId'
+        - $ref: '#/components/parameters/EntityId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                baseUpdatedAt: { type: [string, 'null'], format: date-time }
+      responses:
+        '200':
+          description: Опубликованная страница
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '409': { $ref: '#/components/responses/Error' }
+  /api/handbook-editor/analytics:
+    get:
+      tags: [Editor]
+      summary: Метрики поиска, полезности, свежести и вопросов
+      parameters:
+        - $ref: '#/components/parameters/HandbookId'
+      responses:
+        '200':
+          description: Аналитика справочника
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+components:
+  securitySchemes:
+    MaxInitData:
+      type: apiKey
+      in: header
+      name: X-Max-Init-Data
+      description: Подписанная строка запуска мини-приложения MAX
+    ReviewKey:
+      type: apiKey
+      in: header
+      name: X-Review-Key
+      description: Временный ключ жюри для изолированной модельной песочницы
+  parameters:
+    HandbookId:
+      in: query
+      name: handbookId
+      required: true
+      schema: { type: string, format: uuid }
+      description: Идентификатор справочника из ответа POST /api/demo
+    EntityId:
+      in: path
+      name: id
+      required: true
+      schema: { type: string, format: uuid }
+  responses:
+    Error:
+      description: Ошибка с безопасным сообщением
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error]
+            properties:
+              error:
+                type: object
+                required: [code, message]
+                properties:
+                  code: { type: string }
+                  message: { type: string }
+                  details: { type: object, additionalProperties: true }

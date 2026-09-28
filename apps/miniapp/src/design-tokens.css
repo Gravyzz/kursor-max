@@ -1,0 +1,198 @@
+/* Палитра, размеры и адаптер MAX UI. Компоненты не задают собственные цвета.
+   Три слоя: сырая палитра (:root) → смысловые токены темы (.pd-app, [data-theme='dark']) → компоненты.
+   Статусные цвета (ok / warn / risk) — только для статусов. Разделы и аватары красятся
+   отдельной декоративной палитрой --pd-cat-*, чтобы «Физкультура» не выглядела как ошибка. */
+:root {
+  --pd-blue: #2258c9;
+  --pd-white: #ffffff;
+  --pd-ink: #17233a;
+  --pd-ink-muted: #47566d;
+  --pd-day: #eef3fb;
+  --pd-day-end: #dce6f5;
+  --pd-night: #0e1a2e;
+  --pd-night-end: #132440;
+  --pd-green: #15633a;
+  --pd-amber: #814200;
+  --pd-red: #a9253b;
+  --pd-font: 'Onest', system-ui, sans-serif;
+  --pd-font-xs: 12px;
+  --pd-font-sm: 14px;
+  --pd-font-md: 16px;
+  --pd-font-lg: 20px;
+  --pd-font-xl: 28px;
+  /* Два уровня формы: контейнеры (карточки, листы, док) — 20 px; элементы управления
+     (кнопки, поля, чипы, переключатели, поиск) — полностью скруглённые. */
+  --pd-radius-sm: 12px;
+  --pd-radius: 20px;
+  --pd-radius-lg: 20px;
+  --pd-radius-round: 999px;
+  --pd-radius-control: 999px;
+  --pd-safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+.pd-app {
+  /* Поверхности и текст на них */
+  --pd-surface: var(--pd-white);
+  --pd-surface-2: var(--pd-day);
+  --pd-surface-3: var(--pd-day-end);
+  --pd-on-surface: var(--pd-ink);
+  --pd-on-surface-muted: var(--pd-ink-muted);
+  --pd-link: var(--pd-blue);
+  --pd-tint-base: var(--pd-white);
+  /* Нейтральный серый неактивных кнопок — без синевы, чтобы не путать с активной вторичной */
+  --pd-disabled: #e4e6ea;
+  --pd-on-disabled: #5b6472;
+  /* Акцентная поверхность: срочное и важное выделяется тоном, а не ещё одной белой карточкой */
+  --pd-surface-accent: color-mix(in srgb, var(--pd-blue) 7%, var(--pd-white));
+  --pd-surface-warn: color-mix(in srgb, var(--pd-amber) 9%, var(--pd-white));
+  --pd-surface-risk: color-mix(in srgb, var(--pd-red) 8%, var(--pd-white));
+  /* Декоративная палитра разделов и аватаров — вне статусных цветов */
+  --pd-cat-0: #2258c9;
+  --pd-cat-1: #6741c7;
+  --pd-cat-2: #0b6f7c;
+  --pd-cat-3: #a0337f;
+  --pd-cat-4: #4a5b78;
+
+  --pd-brand: var(--pd-blue);
+  --pd-brand-2: var(--pd-blue);
+  --pd-brand-grad: linear-gradient(135deg, var(--pd-blue), color-mix(in srgb, var(--pd-blue) 82%, var(--pd-ink)));
+  --pd-text: var(--pd-on-surface);
+  --pd-muted: var(--pd-on-surface-muted);
+  --pd-faint: var(--pd-on-surface-muted);
+  --pd-ink-faint: var(--pd-on-surface-muted);
+  --pd-accent: var(--pd-link);
+  --pd-focus: var(--pd-blue);
+  --pd-on-accent: var(--pd-white);
+  --pd-card: var(--pd-surface);
+  --pd-field: var(--pd-surface);
+  --pd-glass: var(--pd-surface);
+  --pd-glass-soft: var(--pd-surface-2);
+  --pd-glass-strong: var(--pd-surface);
+  --pd-floating: color-mix(in srgb, var(--pd-surface) 94%, transparent);
+  --pd-glass-shadow: 0 4px 20px color-mix(in srgb, var(--pd-ink) 8%, transparent);
+  --pd-ring: inset 0 0 0 1px var(--pd-line);
+  --pd-shadow: var(--pd-glass-shadow);
+  --pd-line: color-mix(in srgb, var(--pd-on-surface) 16%, transparent);
+  --pd-control-line: color-mix(in srgb, var(--pd-on-surface) 55%, transparent);
+  --pd-sunken: var(--pd-surface-2);
+  --pd-accent-soft: color-mix(in srgb, var(--pd-link) 9%, var(--pd-tint-base));
+  --pd-accent-track: color-mix(in srgb, var(--pd-link) 18%, var(--pd-tint-base));
+  --pd-ok: var(--pd-green);
+  --pd-warn: var(--pd-amber);
+  --pd-risk: var(--pd-red);
+  --pd-risk-solid: var(--pd-red);
+  --pd-hero-text: var(--pd-text);
+  --pd-hero-muted: var(--pd-muted);
+  --pd-dock: var(--pd-floating);
+  --pd-dock-button: transparent;
+  --pd-section-color: var(--pd-cat-0);
+  --pd-bg-top: var(--pd-day);
+  --pd-bg-bottom: var(--pd-day-end);
+  position: relative;
+  isolation: isolate;
+  min-height: 100vh;
+  font-family: var(--pd-font);
+  color: var(--pd-text);
+}
+/* Ночная тема — тёмные поверхности, а не белые карточки на тёмном фоне */
+.pd-app[data-theme='dark'] {
+  --pd-surface: #172640;
+  --pd-surface-2: #1f3152;
+  --pd-surface-3: #293e62;
+  --pd-on-surface: #eef3fb;
+  --pd-on-surface-muted: #b6c3d9;
+  --pd-link: #93b4ff;
+  --pd-tint-base: var(--pd-surface);
+  --pd-disabled: #2b3342;
+  --pd-on-disabled: #a9b2c0;
+  --pd-surface-accent: color-mix(in srgb, var(--pd-link) 14%, var(--pd-surface));
+  --pd-surface-warn: color-mix(in srgb, #f0b35a 14%, var(--pd-surface));
+  --pd-surface-risk: color-mix(in srgb, #ff8b9c 14%, var(--pd-surface));
+  --pd-cat-0: #8fb0ff;
+  --pd-cat-1: #b9a2ff;
+  --pd-cat-2: #6fd1dc;
+  --pd-cat-3: #f09ad6;
+  --pd-cat-4: #aebbd2;
+  --pd-ok: #74d69f;
+  --pd-warn: #f0b35a;
+  --pd-risk: #ff8b9c;
+  --pd-risk-solid: #c23a50;
+  --pd-focus: var(--pd-link);
+  --pd-glass-shadow: 0 4px 20px rgb(0 0 0 / 0.28);
+  --pd-bg-top: var(--pd-night);
+  --pd-bg-bottom: var(--pd-night-end);
+}
+.pd-app::before {
+  content: ''; position: fixed; inset: 0; z-index: -1;
+  background: linear-gradient(180deg, var(--pd-bg-top), var(--pd-bg-bottom));
+}
+html, body { background: var(--pd-day); }
+html[data-theme='dark'], html[data-theme='dark'] body { background: var(--pd-night); }
+.card, .sheet, .hb-search, .hb-tool, .hb-metric, .role-card, .bottombar, .hb-text, .hb-alert,
+.hb-chip--soft, .banner, .onb-card, .hb-home-pill, .hb-home-tile, .hb-hero__search, .hb-editor-tabs {
+  --pd-text: var(--pd-on-surface);
+  --pd-muted: var(--pd-on-surface-muted);
+  --pd-faint: var(--pd-on-surface-muted);
+  --pd-accent: var(--pd-link);
+  color: var(--pd-text);
+}
+/* MAX UI: те же поверхности, скругление элементов управления и синий MAX */
+.pd-app, .pd-app :is(.card, .sheet, .bottombar) {
+  --family-base: var(--pd-font);
+  --family-headers: var(--pd-font);
+  --size-border-radius-action-large: var(--pd-radius-control);
+  --size-border-radius-action-medium: var(--pd-radius-control);
+  --size-border-radius-button-large: var(--pd-radius-control);
+  --size-border-radius-button-medium: var(--pd-radius-control);
+  --size-border-radius-button-small: var(--pd-radius-control);
+  --text-primary-inverse-static: var(--pd-white);
+  --button-primary: var(--pd-blue);
+  --states-button-primary-hover: color-mix(in srgb, var(--pd-blue) 85%, var(--pd-ink));
+  --states-button-primary-pressed: var(--pd-ink);
+  --button-secondary: var(--pd-surface);
+  --button-secondary-contrast: var(--pd-surface);
+  --states-button-secondary-hover: var(--pd-surface-2);
+  --states-button-secondary-pressed: var(--pd-surface-3);
+  --states-button-secondary-contrast-hover: var(--pd-surface-2);
+  --states-button-secondary-contrast-pressed: var(--pd-surface-3);
+  --button-negative: var(--pd-red);
+  --states-button-negative-hover: var(--pd-red);
+  --states-button-negative-pressed: var(--pd-red);
+  --text-primary: var(--pd-text);
+  --text-secondary: var(--pd-muted);
+  --text-tertiary: var(--pd-faint);
+  --text-themed: var(--pd-link);
+  --icon-themed: var(--pd-link);
+  --controls-active: var(--pd-blue);
+  --counter-themed: var(--pd-blue);
+  --background-primary: var(--pd-surface);
+  --background-secondary: var(--pd-surface-2);
+  --background-card: var(--pd-surface);
+  --background-tertiary: var(--pd-surface-2);
+  --divider-primary: var(--pd-line);
+  --divider-secondary: var(--pd-line);
+  --background-overlay: color-mix(in srgb, var(--pd-night) 65%, transparent);
+  /* Неактивная кнопка — серая, с читаемой подписью: не путается ни с основной, ни со вторичной */
+  --states-button-primary-disabled: var(--pd-disabled);
+  --states-button-secondary-disabled: var(--pd-disabled);
+  --states-button-secondary-contrast-disabled: var(--pd-disabled);
+  --states-button-negative-disabled: var(--pd-disabled);
+  --states-text-primary-inverse-static-disabled: var(--pd-on-disabled);
+  --states-text-primary-disabled: var(--pd-on-disabled);
+  --states-text-secondary-disabled: var(--pd-on-surface-muted);
+  --states-text-tertiary-disabled: var(--pd-on-surface-muted);
+  --states-text-themed-disabled: var(--pd-on-surface-muted);
+  --states-icon-primary-disabled: var(--pd-on-surface-muted);
+}
+/* Цвет раздела: задаётся значком, который редактор выбирает для раздела */
+.hb-cat-0 { --pd-section-color: var(--pd-cat-0); }
+.hb-cat-1 { --pd-section-color: var(--pd-cat-1); }
+.hb-cat-2 { --pd-section-color: var(--pd-cat-2); }
+.hb-cat-3 { --pd-section-color: var(--pd-cat-3); }
+.hb-cat-4 { --pd-section-color: var(--pd-cat-4); }
+/* Вторичная кнопка — одна на всё приложение: поверхность, синяя подпись, тонкая синяя рамка */
+.pd-app [class*='Button_variant_secondary'] {
+  --text-primary: var(--pd-link);
+  border: 1px solid color-mix(in srgb, var(--pd-link) 32%, var(--pd-tint-base));
+}
+.pd-app [class*='Button_variant_secondary']:disabled { border-color: transparent; }
+.pd-app [class*='Button__content'] { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }

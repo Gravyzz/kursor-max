@@ -1,0 +1,317 @@
+/* «Стекло» — визуальный слой мини-приложения поверх компоновки из styles.css.
+   Фон — синий градиент (ночью — тёмно-фиолетовый); всё, что лежит прямо на фоне, — белое.
+   Карточки, кнопки, поиск и док — матовое стекло с тёмными чернилами.
+   Главная: кампус во весь верх экрана, заголовок поверх фото.
+   Порядок слоёв: design-tokens.css → styles.css → glass.css. */
+
+/* ─── Токены ─────────────────────────────────────────────────────────── */
+.pd-app {
+  --pd-radius: 28px;
+  --pd-radius-lg: 28px;
+  --pd-blue: #2467ed;
+  --pd-brand: #2467ed;
+  --pd-brand-grad: linear-gradient(135deg, #2269ef, #644bdf);
+  --pd-selected: #1f3a93;
+
+  /* Текст прямо на фоне — белый в обеих темах */
+  --pd-text: #ffffff;
+  /* 0.92, а не 0.88: под голубым бликом вверху справа мелкий текст опускался до 4.2:1 */
+  --pd-muted: rgba(255, 255, 255, 0.92);
+  --pd-faint: rgba(255, 255, 255, 0.92);
+  --pd-link: #e3ebff;
+  --pd-accent: #e3ebff;
+  --pd-line: rgba(255, 255, 255, 0.24);
+  --pd-focus: #ffffff;
+
+  /* Стекло */
+  --pd-glass-bg: linear-gradient(145deg, rgba(250, 252, 255, 0.92), rgba(218, 230, 248, 0.84));
+  --pd-glass-soft-bg: linear-gradient(145deg, rgba(238, 244, 255, 0.86), rgba(204, 219, 243, 0.8));
+  --pd-glass-edge: inset 0 1px 0 rgba(255, 255, 255, 0.75), inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+  --pd-glass-drop: 0 14px 34px rgba(6, 20, 38, 0.16);
+  --pd-glass-shadow: var(--pd-glass-edge), var(--pd-glass-drop);
+  --pd-circle-bg: rgba(255, 255, 255, 0.9);
+  --pd-dock-bg: rgba(231, 239, 246, 0.86);
+
+  /* Внутри стекла */
+  --pd-surface: rgba(255, 255, 255, 0.82);
+  --pd-surface-2: rgba(23, 35, 58, 0.06);
+  --pd-surface-3: rgba(23, 35, 58, 0.1);
+  --pd-on-surface: #17233a;
+  --pd-on-surface-muted: #3a4960;
+  /* Стекло полупрозрачное и над низом фона темнеет: #1c4fc2 давал 4.3:1 у ссылок и меток — чуть глубже */
+  --pd-link-surface: #1a48b4;
+  --pd-field: rgba(255, 255, 255, 0.8);
+
+  /* Значки разделов и аватары — одним синим */
+  --pd-cat-0: var(--pd-link-surface);
+  --pd-cat-1: var(--pd-link-surface);
+  --pd-cat-2: var(--pd-link-surface);
+  --pd-cat-3: var(--pd-link-surface);
+  --pd-cat-4: var(--pd-link-surface);
+
+  /* Фон. Верх градиента достаточно тёмный, чтобы мелкий белый текст на нём читался (от 4.5:1).
+     --pd-day / --pd-day-end — самый светлый и самый тёмный тон фона: по ним e2e проверяет контраст. */
+  --pd-day: #3e6aa8;
+  --pd-day-end: #16305f;
+  --pd-bg-image:
+    radial-gradient(circle at 90% 6%, rgba(0, 191, 255, 0.08) 0%, transparent 32%),
+    linear-gradient(165deg, #3e6aa8 0%, #33609f 40%, #20468a 72%, #16305f 100%);
+}
+.pd-app[data-theme='dark'] {
+  --pd-glass-bg: linear-gradient(145deg, rgba(38, 54, 96, 0.84), rgba(20, 30, 62, 0.8));
+  --pd-glass-soft-bg: linear-gradient(145deg, rgba(44, 58, 108, 0.8), rgba(24, 34, 70, 0.78));
+  --pd-glass-edge: inset 0 1px 0 rgba(255, 255, 255, 0.12), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  --pd-glass-drop: 0 14px 34px rgba(0, 0, 0, 0.36);
+  --pd-circle-bg: rgba(40, 56, 100, 0.86);
+  --pd-dock-bg: rgba(26, 36, 72, 0.86);
+  --pd-selected: #3d63d8;
+  --pd-surface: rgba(255, 255, 255, 0.06);
+  --pd-surface-2: rgba(255, 255, 255, 0.08);
+  --pd-surface-3: rgba(255, 255, 255, 0.14);
+  --pd-on-surface: #eef3ff;
+  --pd-on-surface-muted: #c1cce2;
+  --pd-link-surface: #a9c2ff;
+  /* Значки разделов и аватары одним синим и ночью: иначе побеждает разноцветная палитра из design-tokens.css */
+  --pd-cat-0: var(--pd-link-surface);
+  --pd-cat-1: var(--pd-link-surface);
+  --pd-cat-2: var(--pd-link-surface);
+  --pd-cat-3: var(--pd-link-surface);
+  --pd-cat-4: var(--pd-link-surface);
+  --pd-field: rgba(255, 255, 255, 0.08);
+  --pd-night: #150a3a;
+  --pd-night-end: #08101f;
+  --pd-bg-image:
+    radial-gradient(circle at 18% 10%, rgba(71, 26, 255, 0.5) 0%, transparent 34%),
+    radial-gradient(circle at 86% 8%, rgba(0, 191, 255, 0.32) 0%, transparent 30%),
+    linear-gradient(160deg, #150a3a 0%, #132a55 48%, #08101f 100%);
+}
+.pd-app::before { background: var(--pd-bg-image); background-color: #17305f; }
+html, body { background: #17305f; }
+html[data-theme='dark'], html[data-theme='dark'] body { background: #0d0a24; }
+
+@media (prefers-reduced-transparency: reduce) {
+  .pd-app { --pd-glass-bg: #f2f6fd; --pd-glass-soft-bg: #e4ecf8; --pd-circle-bg: #fff; --pd-dock-bg: #e7eff6; }
+  .pd-app[data-theme='dark'] { --pd-glass-bg: #1b2850; --pd-glass-soft-bg: #1f2d58; --pd-circle-bg: #26366a; --pd-dock-bg: #1a2448; }
+}
+
+/* ─── Всё стеклянное — тёмные чернила и свой синий ──────────────────── */
+/* Только простые классы: составной селектор внутри :is() поднимает приоритет всего списка,
+   и тогда он перебивает цвета конкретных элементов (так тост становился тёмным на тёмном). */
+.pd-app :is(.card, .sheet, .hb-search, .hb-tool, .hb-metric, .role-card, .bottombar, .hb-text, .hb-alert, .hb-chip, .banner,
+  .onb-card, .hb-home-pill, .hb-home-tile, .hb-editor-tabs, .hb-circle, .hb-back, .hb-dock, .fact, .hb-hint) {
+  --pd-text: var(--pd-on-surface);
+  --pd-muted: var(--pd-on-surface-muted);
+  --pd-faint: var(--pd-on-surface-muted);
+  --pd-link: var(--pd-link-surface);
+  --pd-accent: var(--pd-link-surface);
+  --pd-line: color-mix(in srgb, var(--pd-on-surface) 14%, transparent);
+  --pd-accent-soft: color-mix(in srgb, var(--pd-link-surface) 12%, transparent);
+  --pd-accent-track: color-mix(in srgb, var(--pd-link-surface) 20%, transparent);
+  --pd-focus: var(--pd-link-surface);
+  --text-themed: var(--pd-link-surface);
+  --icon-themed: var(--pd-link-surface);
+  color: var(--pd-on-surface);
+}
+
+/* ─── Поверхности ───────────────────────────────────────────────────── */
+/* Без составных селекторов в :is(): иначе правило перебивает оттенки срочного и объявлений ниже */
+.pd-app :is(.card, .hb-text, .hb-home-tile, .hb-metric, .hb-tool, .banner, .hb-search, .hb-home-pill),
+.pd-app .hb-stats .fact {
+  background: var(--pd-glass-bg);
+  box-shadow: var(--pd-glass-shadow);
+  -webkit-backdrop-filter: blur(20px) saturate(1.25);
+  backdrop-filter: blur(20px) saturate(1.25);
+  border: 0;
+}
+.pd-app :is(.card, .hb-home-tile, .hb-metric), .pd-app .hb-stats .fact { border-radius: 28px; }
+.pd-app .banner { border-radius: 24px; }
+.pd-app .sheet { background: var(--pd-glass-bg); background-color: rgba(242, 246, 253, 0.97); -webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px); border-radius: 28px 28px 0 0; }
+.pd-app[data-theme='dark'] .sheet { background-color: rgba(20, 30, 62, 0.97); }
+.pd-app .bottombar { background: var(--pd-glass-bg); -webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px); border-top: 0; box-shadow: 0 -10px 30px rgba(6, 20, 38, 0.16); }
+.pd-app .toast { background: rgba(14, 22, 48, 0.92); color: #fff; -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
+.pd-app .toast--error { background: var(--pd-risk-solid); color: #fff; }
+
+/* Янтарная полоса блока с ошибкой терялась под тенью стекла */
+.pd-app .hb-editblock--problem { box-shadow: inset 3px 0 0 var(--pd-warn), var(--pd-glass-shadow); }
+
+/* Вложенное в стекло — прозрачное: без стекла на стекле */
+.pd-app .card .hb-editor-page-row, .pd-app .hb-editor-section .hb-editor-page-row { background: transparent; }
+.pd-app .hb-editor-section-head { background: rgba(255, 255, 255, 0.35); }
+.pd-app[data-theme='dark'] .hb-editor-section-head { background: rgba(255, 255, 255, 0.05); }
+.pd-app .hb-reading-sheet .hb-reader-blocks > :is(.card, .hb-text) { background: none; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; border-radius: 0; }
+
+/* Срочное и важное — стекло с тонким оттенком */
+.pd-app .hb-reader-event { border-radius: 999px; padding: 8px 18px 8px 8px; }
+.pd-app .hb-reader-event--warn { background: linear-gradient(145deg, rgba(255, 247, 234, 0.94), rgba(246, 226, 198, 0.86)); }
+.pd-app .hb-reader-event--risk { background: linear-gradient(145deg, rgba(255, 238, 240, 0.94), rgba(246, 208, 214, 0.86)); }
+.pd-app[data-theme='dark'] .hb-reader-event--warn { background: linear-gradient(145deg, rgba(92, 64, 30, 0.84), rgba(40, 32, 44, 0.82)); }
+.pd-app[data-theme='dark'] .hb-reader-event--risk { background: linear-gradient(145deg, rgba(96, 34, 52, 0.84), rgba(40, 24, 50, 0.82)); }
+/* Ночью дата срока в кружке: янтарный на полупрозрачном янтаре давал 3.8:1 — кружок тёмного стекла, цвет срочности у цифры */
+.pd-app[data-theme='dark'] :is(.hb-reader-date--warn, .hb-reader-date--risk) { background: var(--pd-circle-bg); }
+.pd-app .hb-announce { background: linear-gradient(145deg, rgba(250, 252, 255, 0.94), rgba(206, 222, 250, 0.86)); box-shadow: var(--pd-glass-shadow); }
+.pd-app[data-theme='dark'] .hb-announce { background: linear-gradient(145deg, rgba(46, 66, 130, 0.86), rgba(24, 36, 80, 0.82)); }
+.pd-app .hb-announce__main .hb-block__icon { background: var(--pd-circle-bg); }
+.pd-app .hb-reading-sheet .hb-alert--warn { background: rgba(255, 240, 214, 0.7); }
+.pd-app .hb-reading-sheet .hb-alert--info { background: rgba(214, 228, 255, 0.6); }
+.pd-app[data-theme='dark'] .hb-reading-sheet .hb-alert--warn { background: rgba(240, 179, 90, 0.14); }
+.pd-app[data-theme='dark'] .hb-reading-sheet .hb-alert--info { background: rgba(147, 180, 255, 0.14); }
+
+/* ─── Текст прямо на фоне ───────────────────────────────────────────── */
+.pd-app .section-title { color: var(--pd-muted); }
+.pd-app .hb-page-meta, .pd-app .hb-reader-verified, .pd-app .hb-reader-verified .pd-icon { color: var(--pd-muted); }
+.pd-app .hb-page-meta .linkbtn { color: #fff; text-decoration: underline; text-decoration-color: rgba(255, 255, 255, 0.45); text-underline-offset: 3px; }
+/* «Убрать страницу в архив» лежит прямо на фоне: тёмно-красный на синем не читался (1.5:1) */
+.pd-app .screen > .hb-danger-link { color: var(--pd-text); text-decoration: underline; text-decoration-color: rgba(255, 255, 255, 0.45); text-underline-offset: 3px; }
+
+/* QR-плакат печатают и сканируют — белый в обеих темах, а не тёмное стекло ночью */
+.pd-app .qr-poster { background: var(--pd-white); color: var(--pd-ink); }
+
+/* ─── Круглые действия, «Назад», аватары ────────────────────────────── */
+.pd-app .hb-circle { width: 48px; height: 48px; background: var(--pd-circle-bg); box-shadow: 0 8px 20px rgba(6, 4, 30, 0.2); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
+.pd-app .hb-back { background: var(--pd-circle-bg); box-shadow: 0 8px 20px rgba(6, 4, 30, 0.2); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); min-height: 48px; }
+.pd-app .hb-reader-avatar, .pd-app .hb-circle.hb-reader-avatar { background: var(--pd-brand-grad); color: #fff; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.36), 0 8px 22px rgba(71, 26, 255, 0.3); }
+.pd-app .hb-book-logo { border-radius: 50%; background: radial-gradient(circle at 32% 24%, rgba(255, 255, 255, 0.4), transparent 32%), var(--pd-brand-grad); }
+.pd-app .hb-member-avatar { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.4); }
+.pd-app .hb-reader-round { background: var(--pd-circle-bg); color: var(--pd-link-surface); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.4); }
+.pd-app .hb-list__row .hb-reader-round { background: var(--pd-accent-soft); box-shadow: none; }
+
+/* ─── Плитки разделов: мягкое стекло, значок в белом круге ──────────── */
+.pd-app .hb-reader-console .hb-home-tile { background: var(--pd-glass-soft-bg); }
+.pd-app :is(.hb-home-tile__icon, .hb-reader-console .hb-home-tile__icon) { background: var(--pd-circle-bg); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.4); }
+
+/* ─── Поиск, чипы, вкладки ──────────────────────────────────────────── */
+.pd-app .hb-search { border-radius: 999px; min-height: 58px; }
+.pd-app .hb-search__go { background: var(--pd-brand-grad); box-shadow: 0 6px 16px rgba(71, 26, 255, 0.3); }
+.pd-app .hb-chip { background: rgba(255, 255, 255, 0.72); border: 0; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.5), 0 4px 12px rgba(6, 20, 38, 0.08); color: var(--pd-on-surface); }
+.pd-app[data-theme='dark'] .hb-chip { background: rgba(255, 255, 255, 0.1); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12); }
+.pd-app .card .hb-chip { background: var(--pd-surface-2); box-shadow: none; }
+.pd-app :is(.hb-chip--on, .card .hb-chip--on, .hb-editor-filters .hb-chip--on) { background: var(--pd-brand-grad); color: #fff; box-shadow: 0 6px 14px rgba(71, 26, 255, 0.25); }
+/* Стеклянный чип выше задаёт тёмные чернила — варианты возвращают свой цвет (иначе «Удалить блок?» тёмным на красном) */
+.pd-app .hb-chip--danger { color: var(--pd-risk); }
+.pd-app .hb-chip--danger-solid { color: #fff; box-shadow: none; }
+.pd-app .hb-chip--static { color: var(--pd-muted); }
+.pd-app .hb-editor-tabs { background: var(--pd-glass-bg); box-shadow: var(--pd-glass-shadow); }
+.pd-app :is(.hb-editor-tabs button[aria-selected='true'], .hb-reader-tabs [aria-selected='true']) { background: var(--pd-brand-grad); color: #fff; box-shadow: 0 6px 14px rgba(71, 26, 255, 0.22); }
+
+/* ─── Кнопки MAX UI: основная — градиент, вторичная — стекло ────────── */
+.pd-app [class*='Button_variant_primary']:not(:disabled) { background-image: var(--pd-brand-grad); box-shadow: 0 8px 20px rgba(71, 26, 255, 0.22); }
+.pd-app [class*='Button_variant_secondary'] { --text-primary: var(--pd-link-surface); border: 0; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.55), 0 6px 16px rgba(6, 20, 38, 0.08); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
+/* На фоне — почти непрозрачное стекло, чтобы не выглядела неактивной; в карточке — тихая подложка */
+.pd-app [class*='Button_variant_secondary']:not(:disabled) { background-color: rgba(250, 252, 255, 0.92); }
+.pd-app[data-theme='dark'] [class*='Button_variant_secondary'] { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14); }
+.pd-app[data-theme='dark'] [class*='Button_variant_secondary']:not(:disabled) { background-color: rgba(52, 72, 130, 0.72); }
+.pd-app .card [class*='Button_variant_secondary'] { box-shadow: none; }
+.pd-app .card [class*='Button_variant_secondary']:not(:disabled) { background-color: var(--pd-surface-2); }
+
+/* ─── Поля ввода ────────────────────────────────────────────────────── */
+/* Только цвет фона: сокращённое background стирало стрелку выпадающего списка .hb-select */
+.pd-app :is(.hb-input, .hb-textarea, .input, .textarea) { background-color: var(--pd-field); border-color: color-mix(in srgb, var(--pd-on-surface) 22%, transparent); }
+/* Подмес полупрозрачной поверхности осветлял подсказку до 4:1 на стекле — берём приглушённый цвет стекла как есть */
+.pd-app ::placeholder { color: var(--pd-muted); }
+
+/* ─── Док: стеклянная капсула, активная вкладка — градиент ──────────── */
+.pd-app .hb-dock { background: var(--pd-dock-bg); border-radius: 999px; box-shadow: var(--pd-glass-shadow); -webkit-backdrop-filter: blur(24px) saturate(1.35); backdrop-filter: blur(24px) saturate(1.35); padding: 6px; }
+.pd-app .hb-dock button { border-radius: 999px; color: var(--pd-on-surface); }
+.pd-app .hb-dock button[aria-current='page'] { background: var(--pd-brand-grad); color: #fff; box-shadow: 0 6px 16px rgba(71, 26, 255, 0.3); }
+
+/* ─── Главная: кампус во весь верх экрана, заголовок поверх фото ────── */
+/* Фото привязано к экрану целиком: во всю ширину и из-под плашки демо */
+.pd-app .screen:has(> .hb-reader-hero) { position: relative; isolation: isolate; }
+.pd-app[data-theme] .hb-reader-hero { position: static; display: flex; flex-direction: column; gap: 16px; min-height: 440px; }
+.pd-app .hb-reader-hero .hb-hero__intro { margin-top: auto; grid-template-columns: minmax(0, 1fr); padding: 0 4px; }
+.pd-app .hb-reader-hero .hb-cover {
+  position: absolute; top: 0; left: 0; right: 0; height: 560px; z-index: -1;
+  border-radius: 0; box-shadow: none; background-size: cover; background-position: center top;
+  /* Фото растворяется в фоне к поиску — без жёсткой границы */
+  -webkit-mask-image: linear-gradient(180deg, #000 76%, transparent 100%);
+  mask-image: linear-gradient(180deg, #000 76%, transparent 100%);
+}
+/* Затемнение: сверху — под кнопками, снизу — под заголовком; белый текст читается на любом фото */
+.pd-app .hb-reader-hero .hb-cover::after {
+  content: ''; position: absolute; inset: 0;
+  /* Приветствие, название и подпись лежат на 62–86 % высоты фото: там затемнение ровное и плотное,
+     иначе мелкий белый текст на светлых окнах и небе опускался до 3:1 */
+  background: linear-gradient(180deg, rgba(8, 14, 40, 0.28) 0%, rgba(8, 14, 40, 0) 22%, rgba(8, 14, 40, 0) 40%, rgba(8, 14, 40, 0.6) 62%, rgba(8, 14, 40, 0.6) 86%, rgba(8, 14, 40, 0.45) 100%);
+}
+.pd-app[data-theme='dark'] .hb-reader-hero .hb-cover::after {
+  background: linear-gradient(180deg, rgba(4, 4, 20, 0.3) 0%, rgba(4, 4, 20, 0) 24%, rgba(4, 4, 20, 0) 42%, rgba(4, 4, 20, 0.62) 62%, rgba(4, 4, 20, 0.62) 86%, rgba(4, 4, 20, 0.45) 100%);
+}
+.pd-app .hb-reader-hero .hb-hero__title { color: #fff; font-size: 30px; line-height: 1.1; text-shadow: 0 2px 16px rgba(4, 8, 30, 0.55); }
+.pd-app .hb-reader-hero :is(.hb-hero__sub, .hb-reader-greeting) { color: rgba(255, 255, 255, 0.9); text-shadow: 0 1px 10px rgba(4, 8, 30, 0.6); }
+@media (max-width: 359px) {
+  .pd-app[data-theme] .hb-reader-hero { min-height: 400px; }
+  .pd-app .hb-reader-hero .hb-cover { height: 510px; }
+}
+
+/* ─── Профиль: переключатели — отдельные капсулы ────────────────────── */
+.pd-app .hb-segment { display: flex; flex-wrap: wrap; gap: 8px; padding: 0; background: none; border-radius: 0; }
+.pd-app .hb-segment [role='radio'] {
+  flex: 0 0 auto; min-width: 44px; min-height: 44px; padding: 0 16px; border-radius: 999px;
+  background: rgba(23, 35, 58, 0.05); border: 1px solid rgba(23, 35, 58, 0.16); box-shadow: none;
+  color: var(--pd-on-surface); font-size: 14px; font-weight: 500; cursor: pointer;
+}
+.pd-app .hb-segment [aria-checked='true'] { background: var(--pd-selected); border-color: var(--pd-selected); color: #fff; font-weight: 600; }
+.pd-app[data-theme='dark'] .hb-segment [role='radio']:not([aria-checked='true']) { background: rgba(255, 255, 255, 0.06); border-color: rgba(255, 255, 255, 0.18); }
+
+/* ─── Профиль: курс — шкала 1–6 ─────────────────────────────────────── */
+.pd-app .hb-course-slider { display: grid; gap: 8px; }
+/* Зона нажатия 40 px при прежней высоте в сетке: отрицательные поля */
+.pd-app .hb-range { -webkit-appearance: none; appearance: none; width: 100%; height: 40px; margin: -4px 0; background: transparent; cursor: pointer; --fill: var(--pd-selected); --rest: rgba(23, 35, 58, 0.12); }
+.pd-app[data-theme='dark'] .hb-range { --fill: #6f8fff; --rest: rgba(255, 255, 255, 0.14); }
+.pd-app .hb-range:focus-visible { outline: 2px solid var(--pd-link-surface); outline-offset: 4px; border-radius: 999px; }
+.pd-app .hb-range::-webkit-slider-runnable-track { height: 8px; border-radius: 999px; background: linear-gradient(90deg, var(--fill) var(--p), var(--rest) var(--p)); }
+.pd-app .hb-range::-webkit-slider-thumb { -webkit-appearance: none; width: 28px; height: 28px; margin-top: -10px; border-radius: 50%; background: #fff; border: 3px solid var(--fill); box-shadow: 0 2px 8px rgba(6, 20, 38, 0.25); }
+.pd-app .hb-range::-moz-range-track { height: 8px; border-radius: 999px; background: var(--rest); }
+.pd-app .hb-range::-moz-range-progress { height: 8px; border-radius: 999px; background: var(--fill); }
+.pd-app .hb-range::-moz-range-thumb { width: 22px; height: 22px; border-radius: 50%; background: #fff; border: 3px solid var(--fill); box-shadow: 0 2px 8px rgba(6, 20, 38, 0.25); }
+.pd-app .hb-range--empty { --fill: rgba(23, 35, 58, 0.35); }
+.pd-app .hb-range--empty::-webkit-slider-runnable-track { background: var(--rest); }
+.pd-app .hb-range__ticks { display: flex; justify-content: space-between; margin-top: -4px; }
+.pd-app .hb-range__ticks button { width: 40px; height: 40px; margin: -6px; padding: 0; border: 0; background: none; color: var(--pd-on-surface-muted); font: inherit; font-size: 13px; font-variant-numeric: tabular-nums; cursor: pointer; }
+.pd-app .hb-range__ticks .hb-range__tick--on { color: var(--pd-selected); font-weight: 700; }
+.pd-app[data-theme='dark'] .hb-range__ticks .hb-range__tick--on { color: #a9c2ff; }
+
+/* ─── Команда: «Кто что делает» — по нажатию ────────────────────────── */
+.pd-app .hb-title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.pd-app .hb-hint-toggle {
+  display: inline-flex; align-items: center; gap: 6px; flex: none; min-height: 40px; padding: 0 14px 0 10px; border: 0; border-radius: 999px; cursor: pointer;
+  background: var(--pd-circle-bg); color: var(--pd-on-surface); font: inherit; font-size: 14px; font-weight: 600; box-shadow: 0 6px 16px rgba(6, 4, 30, 0.16);
+}
+.pd-app .hb-hint-toggle .pd-icon { color: var(--pd-link-surface); }
+.pd-app .hb-hint-toggle[aria-expanded='true'] { background: var(--pd-selected); color: #fff; }
+.pd-app .hb-hint-toggle[aria-expanded='true'] .pd-icon { color: #fff; }
+.pd-app .hb-hint {
+  display: grid; gap: 8px; margin-top: 4px; padding: 14px 16px; border-radius: 20px;
+  background: var(--pd-glass-bg); box-shadow: var(--pd-glass-shadow); font-size: 14px; line-height: 20px;
+  -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
+}
+.pd-app .hb-hint p { margin: 0; }
+
+/* Аватар — всегда круг: фото из MAX бывает вытянутым, а в сетке WebKit (iPhone) процентная высота
+   картинки считалась от её собственной высоты — круг растягивался в овал и наезжал на имя.
+   Картинка закреплена по рамке аватара и обрезается по кругу. */
+.pd-app .hb-reader-avatar { position: relative; flex: none; overflow: hidden; aspect-ratio: 1 / 1; min-width: 0; min-height: 0; }
+.pd-app .hb-reader-avatar img { position: absolute; inset: 0; width: 100%; height: 100%; max-width: none; display: block; object-fit: cover; border-radius: inherit; }
+
+/* ─── Широкий экран (MAX на компьютере и в браузере) ──────────────────
+   Структура та же, что на телефоне: колонка шире, разделы в две колонки, плитки главной — в четыре.
+   Фото кампуса — 780 px в ширину, растянутое на всё окно оно мылится, поэтому на компьютере
+   это карточка по ширине колонки со скруглёнными углами: почти в родном размере и резкое. */
+@media (min-width: 900px) {
+  .pd-app { overflow-x: clip; }
+  .pd-app .screen { max-width: 860px; }
+  .pd-app .bottombar__inner { max-width: 860px; }
+  .pd-app .hb-reader-hero .hb-cover {
+    left: 0; right: 0; top: 0; height: 440px; border-radius: 32px; overflow: hidden;
+    background-position: center 42%; -webkit-mask-image: none; mask-image: none;
+    box-shadow: 0 18px 50px rgba(6, 12, 40, 0.35);
+  }
+  .pd-app .hb-reader-hero .hb-cover::after { border-radius: inherit; }
+  /* Кнопки и заголовок — внутри карточки, а не вровень с её краем */
+  .pd-app .hb-reader-hero :is(.hb-hero__top, .hb-hero__intro) { padding-inline: 24px; }
+  .pd-app .hb-reader-hero .hb-hero__search { margin-inline: 16px; }
+  .pd-app[data-theme] .hb-reader-hero { min-height: 400px; }
+  .pd-app .hb-reader-hero .hb-hero__title { font-size: 40px; }
+  .pd-app .hb-reader-console { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .pd-app .screen > .stack:has(> .hb-course) { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
+}

@@ -1,0 +1,174 @@
+# Курсор — запуск всех локальных компонентов одной командой:
+#
+#   docker compose up --build -d
+#
+# Без .env поднимается офлайн-стенд: имитация MAX Bot API, демо-данные, тестовый вход в мини-приложение.
+#   http://localhost:9090/__mock/  — чат с ботом (имитация клиента MAX)
+#   http://localhost:8080/         — мини-приложение и API
+# Работа с настоящим MAX на сервере: .env → COMPOSE_FILE=compose.yaml:compose.prod.yaml (см. README).
+
+name: spravochnik
+
+# Реестр базовых образов (node, postgres, caddy). По умолчанию — Docker Hub.
+# Если Docker Hub недоступен из вашей сети: IMAGE_REGISTRY=dockerhub.timeweb.cloud/library (или mirror.gcr.io/library).
+x-build-args: &build-args
+  IMAGE_REGISTRY: ${IMAGE_REGISTRY:-docker.io/library}
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+# Общие переменные для ролей серверного образа (migrate, api, bot, worker).
+# Значения по умолчанию рассчитаны на офлайн-стенд и не содержат секретов.
+# Контейнер получает только то, что перечислено здесь: новую переменную из apps/server/src/config.ts
+# добавьте и сюда, и в .env.example / .env.production.example.
+x-server-env: &server-env
+  NODE_ENV: ${NODE_ENV:-development}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  DATABASE_URL: postgres://${POSTGRES_USER:-spravochnik}:${POSTGRES_PASSWORD:-spravochnik_local_only}@db:5432/${POSTGRES_DB:-spravochnik}
+  BOT_TOKEN: ${BOT_TOKEN:-mock-token-not-a-secret}
+  MAX_API_BASE_URL: ${MAX_API_BASE_URL:-http://max-mock:9090}
+  BOT_MODE: ${BOT_MODE:-polling}
+  PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
+  WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
+  BOT_USERNAME: ${BOT_USERNAME:-}
+  BOT_USER_ID: ${BOT_USER_ID:-}
+  MINIAPP_BUTTON: ${MINIAPP_BUTTON:-open_app}
+  DEV_AUTH: ${DEV_AUTH:-true}
+  REVIEW_API_KEY: ${REVIEW_API_KEY:-}
+  REVIEW_USER_ID: ${REVIEW_USER_ID:-9000000001}
+  APP_SECRET: ${APP_SECRET:-}
+  APP_TIMEZONE: ${APP_TIMEZONE:-Europe/Moscow}
+  DEMO_ENABLED: ${DEMO_ENABLED:-true}
+  NOTIFY_RPS: ${NOTIFY_RPS:-20}
+  WORKER_TICK_MS: ${WORKER_TICK_MS:-3000}
+  TRUST_PROXY: ${TRUST_PROXY:-loopback,linklocal,uniquelocal}
+  RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-600}
+  INITDATA_MAX_AGE_SEC: ${INITDATA_MAX_AGE_SEC:-86400}
+  # Порты и путь webhook не настраиваются: на них опирается apps/miniapp/Caddyfile (api:3000, bot:3001, /webhook/*)
+  API_PORT: "3000"
+  BOT_PORT: "3001"
+  WEBHOOK_PATH: /webhook/max
+
+services:
+  db:
+    image: ${IMAGE_REGISTRY:-docker.io/library}/postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-spravochnik}
+      POSTGRES_USER: ${POSTGRES_USER:-spravochnik}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-spravochnik_local_only}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    logging: *logging
+
+  # Одноразовый контейнер: применяет миграции и завершается. Он же собирает общий серверный образ.
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/server/Dockerfile
+      args: *build-args
+    image: spravochnik-server:local
+    command: ["migrate"]
+    environment: *server-env
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+    logging: *logging
+
+  api:
+    image: spravochnik-server:local
+    pull_policy: never
+    command: ["api"]
+    init: true
+    restart: unless-stopped
+    environment: *server-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    logging: *logging
+
+  bot:
+    image: spravochnik-server:local
+    pull_policy: never
+    command: ["bot"]
+    init: true
+    restart: unless-stopped
+    environment: *server-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      max-mock:
+        condition: service_started
+        required: false
+    logging: *logging
+
+  worker:
+    image: spravochnik-server:local
+    pull_policy: never
+    command: ["worker"]
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 20s
+    environment: *server-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      max-mock:
+        condition: service_started
+        required: false
+    logging: *logging
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/miniapp/Dockerfile
+      args: *build-args
+    image: spravochnik-web:local
+    restart: unless-stopped
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:8080}
+    ports:
+      - "${WEB_BIND:-127.0.0.1:8080}:8080"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+    logging: *logging
+
+  # Имитация MAX Bot API — только для офлайн-проверки. В compose.prod.yaml отключена.
+  max-mock:
+    build:
+      context: .
+      dockerfile: apps/max-mock/Dockerfile
+      args: *build-args
+    image: spravochnik-max-mock:local
+    restart: unless-stopped
+    environment:
+      PORT: "9090"
+      MOCK_MINIAPP_URL: ${MOCK_MINIAPP_URL:-http://localhost:8080/}
+    ports:
+      - "${MOCK_BIND:-127.0.0.1:9090}:9090"
+    logging: *logging
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

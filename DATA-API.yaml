@@ -1,0 +1,156 @@
+version: 1
+solution: Курсор
+team: SQUAD 70
+baseUrl: https://kursor.139-100-236-88.sslip.io
+description: Последовательный сценарий проверки собственного API на изолированных модельных данных.
+auth:
+  type: apiKey
+  header: X-Review-Key
+  valueSource: Закрытый файл REVIEW-ACCESS.txt из архива сдачи
+  note: Ключ не публикуется в GitHub и может быть отключён после проверки.
+variables:
+  handbookId: Получить из шага create_demo.response.handbookId
+  sectionId: Получить из шага create_section.response.id
+  pageId: Получить из шага create_page.response.id
+checks:
+  - id: health
+    name: API и база доступны
+    method: GET
+    path: /api/health
+    auth: false
+    expect:
+      status: 200
+      contentType: application/json
+      fields: [ok, time]
+  - id: create_demo
+    name: Создать модельный вуз и справочник для проверяющего
+    method: POST
+    path: /api/demo
+    headers:
+      Content-Type: application/json
+      X-Review-Key: "{{reviewKey}}"
+    body:
+      role: dean
+    capture:
+      handbookId: $.handbookId
+    expect:
+      status: 200
+      contentType: application/json
+      fields: [universityId, handbookId, handbookSlug, role]
+  - id: me
+    name: Получить пользователя и роль демо
+    method: GET
+    path: /api/me
+    headers:
+      X-Review-Key: "{{reviewKey}}"
+    expect:
+      status: 200
+      fields: [user, person, demo, handbook]
+  - id: handbook
+    name: Открыть главную справочника
+    method: GET
+    path: /api/handbook?handbookId={{handbookId}}
+    headers:
+      X-Review-Key: "{{reviewKey}}"
+    expect:
+      status: 200
+      fields: [handbook, sections]
+  - id: search
+    name: Найти ответ в опубликованных страницах
+    method: GET
+    path: /api/handbook/search?handbookId={{handbookId}}&q=%D1%81%D0%BF%D1%80%D0%B0%D0%B2%D0%BA%D0%B0
+    headers:
+      X-Review-Key: "{{reviewKey}}"
+    expect:
+      status: 200
+      fields: [query, hits]
+      assertions:
+        - $.hits is an array
+  - id: question
+    name: Отправить вопрос дежурному редактору
+    method: POST
+    path: /api/handbook/questions?handbookId={{handbookId}}
+    headers:
+      Content-Type: application/json
+      X-Review-Key: "{{reviewKey}}"
+    body:
+      text: Где получить справку об обучении для теста API?
+      query: справка
+    expect:
+      status: 200
+  - id: editor_structure
+    name: Получить структуру редактора и статусы страниц
+    method: GET
+    path: /api/handbook-editor/structure?handbookId={{handbookId}}
+    headers:
+      X-Review-Key: "{{reviewKey}}"
+    expect:
+      status: 200
+      fields: [handbook, role, sections]
+  - id: analytics
+    name: Получить продуктовые метрики справочника
+    method: GET
+    path: /api/handbook-editor/analytics?handbookId={{handbookId}}
+    headers:
+      X-Review-Key: "{{reviewKey}}"
+    expect:
+      status: 200
+  - id: create_section
+    name: Создать модельный раздел
+    method: POST
+    path: /api/handbook-editor/sections?handbookId={{handbookId}}
+    headers:
+      Content-Type: application/json
+      X-Review-Key: "{{reviewKey}}"
+    bodyFrom: test-data.json#newSection
+    capture:
+      sectionId: $.id
+    expect:
+      status: 200
+      fields: [id]
+  - id: create_page
+    name: Создать страницу из блоков
+    method: POST
+    path: /api/handbook-editor/pages?handbookId={{handbookId}}
+    headers:
+      Content-Type: application/json
+      X-Review-Key: "{{reviewKey}}"
+    body:
+      sectionId: "{{sectionId}}"
+      title: Тестовая страница API
+      summary: Создана проверяющим только в модельной песочнице
+      blocks:
+        - id: test-text
+          type: text
+          text: Эти данные не относятся к реальному университету.
+    capture:
+      pageId: $.id
+    expect:
+      status: 200
+      fields: [id]
+  - id: publish_page
+    name: Опубликовать модельную страницу
+    method: POST
+    path: /api/handbook-editor/pages/{{pageId}}/publish?handbookId={{handbookId}}
+    headers:
+      Content-Type: application/json
+      X-Review-Key: "{{reviewKey}}"
+    body: {}
+    expect:
+      status: 200
+      fields: [id, status, updatedAt]
+      assertions:
+        - $.status equals published
+negativeChecks:
+  - name: Запрос без авторизации отклоняется
+    method: GET
+    path: /api/me
+    expect:
+      status: 401
+  - name: Неверный идентификатор справочника не подменяется последним открытым
+    method: GET
+    path: /api/handbook?handbookId=00000000-0000-4000-8000-000000000000
+    headers:
+      X-Review-Key: "{{reviewKey}}"
+    expect:
+      status: 404

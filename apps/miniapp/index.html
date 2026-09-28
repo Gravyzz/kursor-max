@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <!-- Тема до первой отрисовки, чтобы не мигал светлый фон (выбор — в «О себе») -->
+    <script>try{var t=localStorage.getItem('handbook:theme');document.documentElement.dataset.theme=t==='light'||(t==='system'&&matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark'}catch(e){}</script>
+    <meta name="description" content="Курсор — справочник факультета в MAX: справки, сессия, общежитие, стипендии — поиск своими словами" />
+    <title>Курсор</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <!-- MAX Bridge: доступ к данным запуска и возможностям клиента MAX -->
+    <script src="https://st.max.ru/js/max-web-app.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
