@@ -94,6 +94,21 @@ export async function welcomeMessage(db: Db, personId: string, role: string, ide
       [[appButton(identity, 'Открыть редактор', 'hbe')]],
     );
   }
+  const universityAdmin = await one(
+    db,
+    "SELECT 1 FROM org_roles WHERE person_id = $1 AND role = 'university_admin' AND revoked_at IS NULL",
+    [personId],
+  );
+  if (universityAdmin) {
+    return message(
+      [
+        `Готово, ${md(shortName(row.full_name))}! Вы администратор университета.`,
+        '',
+        'Ведите общую базу — единые инструкции вуза видны студентам каждого факультета. Подключайте факультеты и назначайте их администраторов.',
+      ],
+      [[appButton(identity, 'Открыть кабинет университета', 'uni')]],
+    );
+  }
   if (role === 'dean') {
     return message(
       ['Вы подключены как сотрудник деканата.', 'Создайте справочник факультета — он придёт с готовой структурой разделов и подсказками, что заполнить.'],
@@ -166,6 +181,30 @@ export async function prepareNotification(db: Db, input: NotificationInput, iden
         ),
       );
     }
+    case 'supplement_review': {
+      // Устарело, если уточнение уже опубликовали или убрали
+      const row = await one<{ base_title: string; handbook_title: string; author: string | null }>(
+        db,
+        `SELECT bp.title AS base_title, h.title AS handbook_title, rb.full_name AS author
+           FROM page_supplements s JOIN pages bp ON bp.id = s.base_page_id
+           JOIN handbooks h ON h.id = s.handbook_id AND h.status = 'active'
+           LEFT JOIN persons rb ON rb.id = s.review_requested_by
+          WHERE s.id = $1 AND s.status <> 'archived' AND s.review_requested_at IS NOT NULL`,
+        [String(p.supplementId)],
+      );
+      if (!row) return skip;
+      return sendIt(
+        message(
+          [
+            `📝 Уточнение ждёт публикации — ${b(row.handbook_title)}`,
+            `К общей странице ${b(row.base_title)}${row.author ? ` · ${md(shortName(row.author))}` : ''}`,
+            p.note ? `«${md(String(p.note))}»` : null,
+            '\nПроверьте и опубликуйте — студенты факультета увидят общую страницу вместе с уточнением.',
+          ],
+          [[appButton(identity, 'Открыть уточнение', `hbs_${String(p.supplementId)}`)]],
+        ),
+      );
+    }
     case 'handbook_return': {
       // Страницу вернули с проверки на доработку (C2): payload { pageId, handbookId, note }.
       // Если её уже снова отправили на проверку или убрали в архив, сообщение устарело
@@ -212,6 +251,73 @@ export async function prepareNotification(db: Db, input: NotificationInput, iden
             row.page_title ? `\nПодробно: ${md(row.page_title)}` : null,
           ],
           [[appButton(identity, row.page_id ? 'Открыть страницу' : 'Открыть справочник', row.page_id ? `hbp_${row.page_id}` : `hb_${row.handbook_slug}`)]],
+        ),
+      );
+    }
+    case 'handbook_base_changed': {
+      // Общую страницу обновили, а у факультета своя версия: payload { pageId (своя версия), basePageId, version, note }.
+      // Устарело, если свою версию уже сверили с этой общей или убрали в архив
+      const row = await one<{ title: string; handbook_title: string; base_title: string }>(
+        db,
+        `SELECT pg.title, h.title AS handbook_title, bp.title AS base_title
+           FROM pages pg JOIN handbooks h ON h.id = pg.handbook_id AND h.status = 'active'
+           JOIN pages bp ON bp.id = pg.inherited_from AND bp.status = 'published'
+          WHERE pg.id = $1 AND pg.status <> 'archived' AND COALESCE(pg.base_version, 0) < $2`,
+        [String(p.pageId), Number(p.version ?? 0)],
+      );
+      if (!row) return skip;
+      const note = typeof p.note === 'string' ? p.note.trim() : '';
+      return sendIt(
+        message(
+          [
+            `🔄 Университет обновил общую страницу «${md(row.base_title)}»`,
+            `У ${b(row.handbook_title)} своя версия — студенты по-прежнему видят её.`,
+            note ? `Что изменилось: «${md(note)}»` : null,
+            '\nСравните версии: перенесите изменения, отметьте «учтено» или вернитесь к общей.',
+          ],
+          [[appButton(identity, 'Сравнить', `hbe_${String(p.pageId)}`)]],
+        ),
+      );
+    }
+    case 'page_review_due': {
+      // Устарело, если страницу уже подтвердили (срок сдвинулся), сняли с публикации или справочник закрыт
+      const row = await one<{ title: string; handbook_title: string; is_base: boolean }>(
+        db,
+        `SELECT pg.title, h.title AS handbook_title, (h.institute_id IS NULL) AS is_base
+           FROM pages pg JOIN handbooks h ON h.id = pg.handbook_id AND h.status = 'active'
+          WHERE pg.id = $1 AND pg.status = 'published' AND to_char(pg.review_at, 'YYYY-MM-DD') = $2`,
+        [String(p.pageId), String(p.reviewAt ?? '')],
+      );
+      if (!row) return skip;
+      return sendIt(
+        message(
+          [
+            `🗓 Пора проверить страницу «${md(row.title)}»`,
+            `${row.is_base ? 'Общая база университета' : b(row.handbook_title)} · срок проверки — ${formatDateRu(String(p.reviewAt))}`,
+            '\nЕсли всё верно — нажмите «Проверено, всё верно». Если что-то изменилось — исправьте и опубликуйте: студенты видят дату последней проверки.',
+          ],
+          [[appButton(identity, 'Открыть страницу', row.is_base ? `uni_${String(p.pageId)}` : `hbe_${String(p.pageId)}`)]],
+        ),
+      );
+    }
+    case 'supplement_anchor_lost': {
+      const row = await one<{ base_title: string; handbook_title: string }>(
+        db,
+        `SELECT bp.title AS base_title, h.title AS handbook_title
+           FROM page_supplements s JOIN pages bp ON bp.id = s.base_page_id AND bp.status = 'published'
+           JOIN handbooks h ON h.id = s.handbook_id AND h.status = 'active'
+          WHERE s.base_page_id = $1 AND s.handbook_id = $2 AND s.status = 'published'`,
+        [String(p.basePageId), String(p.handbookId)],
+      );
+      if (!row) return skip;
+      return sendIt(
+        message(
+          [
+            `📌 Уточнение переехало в конец страницы — ${b(row.handbook_title)}`,
+            `Университет убрал из «${md(row.base_title)}» блок, после которого стояло ваше уточнение.`,
+            '\nПроверьте, что уточнение по-прежнему на месте и понятно студентам.',
+          ],
+          [[appButton(identity, 'Открыть редакцию', 'hbe')]],
         ),
       );
     }

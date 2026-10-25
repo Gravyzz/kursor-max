@@ -4,11 +4,13 @@ import { many, one, pool, tx } from '../db/pool.js';
 import { createLogger } from '../lib/logger.js';
 import { getBotIdentity } from '../max/bot.js';
 import { prepareNotification } from '../notify/render.js';
-import { enqueueToReader } from '../notify/outbox.js';
+import { enqueue, enqueueToReader } from '../notify/outbox.js';
 import { notBefore } from '../domain/dates.js';
 
 export { notBefore };
 import { tlsTrustHint } from '../max/tls.js';
+import { purgeClosed } from '../services/lifecycle.js';
+import { purgeOrphanFiles } from '../services/files.js';
 
 const log = createLogger('worker');
 /** ~5 часов попыток: 30 с, 1, 2, 4, 8, 16, 32 мин, дальше раз в час — переживём сбой MAX или неудачный деплой. */
@@ -50,7 +52,61 @@ interface DueRow {
   attempts: number;
 }
 
+/** Сколько раз пробуем удалить отозванное сообщение, прежде чем оставить его в чате. */
+const MAX_RETRACT_ATTEMPTS = 5;
+
+/**
+ * Удаление отозванных сообщений (объявление удалили в приложении). В диалоге бот удаляет только свои сообщения —
+ * это как раз наш случай. Сообщение, которого уже нет (404) или которое удалить нельзя (400/403), считаем снятым.
+ */
+export async function retractDue(bot: Bot | null, limiter: () => Promise<void>): Promise<number> {
+  const rows = await tx(async (client) => {
+    const due = await many<{ id: number; max_message_id: string | null; simulated: boolean }>(
+      client,
+      `SELECT id, max_message_id, simulated FROM notifications
+        WHERE retract_requested_at IS NOT NULL AND retracted_at IS NULL AND status = 'sent' AND retract_attempts < ${MAX_RETRACT_ATTEMPTS}
+        ORDER BY retract_requested_at
+        LIMIT ${BATCH}
+        FOR UPDATE SKIP LOCKED`,
+    );
+    if (due.length) await client.query('UPDATE notifications SET retract_attempts = retract_attempts + 1 WHERE id = ANY($1::bigint[])', [due.map((r) => r.id)]);
+    return due;
+  });
+  for (const row of rows) {
+    const done = (error: string | null = null) =>
+      pool.query('UPDATE notifications SET retracted_at = now(), last_error = COALESCE($2, last_error) WHERE id = $1', [row.id, error]);
+    // Сообщение не уходило в MAX (симуляция) — удалять нечего
+    if (row.simulated || !row.max_message_id) {
+      await done();
+      continue;
+    }
+    if (!bot) continue;
+    try {
+      await limiter();
+      // SDK кладёт всё из extra в адрес запроса — сигнал отмены туда не передать, поэтому ограничиваем ожидание сами
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          bot.api.deleteMessage(row.max_message_id),
+          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`MAX не ответил за ${SEND_TIMEOUT_MS / 1000} с`)), SEND_TIMEOUT_MS); }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+      await done();
+    } catch (error) {
+      if (error instanceof MaxError && PERMANENT_STATUSES.has(error.status)) {
+        await done(`Не удалось удалить сообщение: ${error.message}`.slice(0, 300));
+      } else {
+        log.warn('Не удалось удалить сообщение, повторим', { id: row.id, error: (error as Error)?.message });
+      }
+    }
+  }
+  return rows.length;
+}
+
 export async function dispatchDue(bot: Bot | null, limiter = createLimiter(config.NOTIFY_RPS)): Promise<number> {
+  await retractDue(bot, limiter);
   const claim = await tx(async (client) => {
     const rows = await many<DueRow>(
       client,
@@ -169,6 +225,8 @@ export async function enqueueDeadlineReminders(): Promise<number> {
         AND audience_matches(dl.audience, r.course::int, r.dorm, r.tags)
         AND audience_matches(pg.audience, r.course::int, r.dorm, r.tags)
         AND audience_matches(sc.audience, r.course::int, r.dorm, r.tags)
+        -- общая страница только для выбранных факультетов напоминает только их студентам
+        AND page_for_handbook(pg.institute_ids, rh.id)
         -- факультет переписал страницу вуза — напоминает его версия, а не исходная
         AND NOT EXISTS (
           SELECT 1 FROM pages ov
@@ -204,6 +262,53 @@ export async function enqueueDeadlineReminders(): Promise<number> {
   return queued;
 }
 
+/**
+ * Напоминания о проверке страниц: срок подошёл — сообщение ответственному и замене,
+ * а если их нет — администраторам справочника (для общей базы — администраторам университета).
+ * Одно сообщение на человека за цикл проверки: после «Проверено» срок сдвигается и цикл начинается заново.
+ */
+export async function enqueueReviewReminders(): Promise<number> {
+  const due = await many<{ page_id: string; review_at: string; person_id: string; timezone: string }>(
+    pool,
+    `WITH due AS (
+       SELECT pg.id, to_char(pg.review_at, 'YYYY-MM-DD') AS review_at, pg.handbook_id, pg.owner_person_id, pg.backup_owner_person_id,
+              h.institute_id, h.university_id, un.timezone
+         FROM pages pg
+         JOIN handbooks h ON h.id = pg.handbook_id AND h.status = 'active'
+         JOIN universities un ON un.id = h.university_id AND (NOT un.is_demo OR un.created_at > now() - interval '14 days')
+        WHERE pg.status = 'published' AND pg.review_at <= (now() AT TIME ZONE un.timezone)::date
+     )
+     SELECT DISTINCT d.id AS page_id, d.review_at, x.person_id, d.timezone
+       FROM due d
+       CROSS JOIN LATERAL (
+         SELECT o AS person_id FROM unnest(ARRAY[d.owner_person_id, d.backup_owner_person_id]) AS o
+         UNION
+         SELECT m.person_id FROM handbook_members m
+          WHERE d.owner_person_id IS NULL AND d.backup_owner_person_id IS NULL AND m.handbook_id = d.handbook_id AND m.role = 'admin'
+         UNION
+         SELECT r.person_id FROM org_roles r
+          WHERE d.owner_person_id IS NULL AND d.backup_owner_person_id IS NULL AND r.revoked_at IS NULL AND r.university_id = d.university_id
+            AND ((d.institute_id IS NULL AND r.role = 'university_admin') OR (r.role = 'faculty_admin' AND r.institute_id = d.institute_id))
+       ) x
+      WHERE x.person_id IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM notifications n WHERE n.dedupe_key = 'hb_review_due:' || d.id || ':' || d.review_at || ':' || x.person_id)
+      LIMIT 2000`,
+  );
+  let queued = 0;
+  for (const row of due) {
+    const id = await enqueue(pool, {
+      personId: row.person_id,
+      kind: 'page_review_due',
+      payload: { pageId: row.page_id, reviewAt: row.review_at },
+      sendAfter: notBefore(row.timezone, '10:00', '21:00'),
+      dedupeKey: `hb_review_due:${row.page_id}:${row.review_at}:${row.person_id}`,
+    });
+    if (id !== null) queued += 1;
+  }
+  if (queued) log.info('Напоминания о проверке страниц поставлены в очередь', { count: queued });
+  return queued;
+}
+
 /** Периодические проверки: напоминания о сроках, служебная уборка. */
 export async function runScheduledChecks(): Promise<void> {
   // Advisory lock живёт в сессии PostgreSQL: берём и отпускаем его на одном выделенном соединении,
@@ -226,6 +331,11 @@ export async function runScheduledChecks(): Promise<void> {
       [STALE_SENDING_MINUTES],
     );
     await enqueueDeadlineReminders();
+    await enqueueReviewReminders();
+    // Закрытые справочники и отключённые факультеты после 90 дней хранения удаляются насовсем
+    await purgeClosed(pool);
+    // Загруженные, но так и не оставленные на страницах файлы
+    await purgeOrphanFiles(pool);
   } finally {
     await lockClient.query('SELECT pg_advisory_unlock(727002)').catch(() => undefined);
     lockClient.release();

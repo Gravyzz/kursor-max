@@ -8,6 +8,7 @@ import {
   myQuestions, search, sectionsWithPages, setFeedback, setProgress, startRef, updateProfile, upcomingDeadlines,
   type HandbookContext,
 } from '../../services/handbook.js';
+import { closedHandbookError } from '../../services/lifecycle.js';
 
 /**
  * Справочник открыт любому пользователю MAX: читателю не нужно быть в списках деканата.
@@ -26,7 +27,10 @@ async function ctx(request: FastifyRequest): Promise<HandbookContext> {
     .parse(request.query ?? {});
   // Явно указанный справочник обязан существовать (API-12): после сброса демо, архивации или опечатки
   // вопрос, оценка и отметки не должны молча уйти в другой справочник — последний открытый
-  if ((query.handbookId || query.handbook) && !(await findHandbook(pool, { id: query.handbookId ?? null, slug: query.handbook ?? null }))) {
+  if ((query.handbookId || query.handbook) && !(await findHandbook(pool, { id: query.handbookId ?? null, slug: query.handbook ?? null }, { reader: true }))) {
+    // Закрытый деканатом справочник — так и говорим, а не «не найден»
+    const closed = await closedHandbookError(pool, { id: query.handbookId ?? null, slug: query.handbookId ? null : query.handbook ?? null });
+    if (closed) throw closed;
     throw notFound('Справочник не найден — возможно, его убрали или демо сбросили. Откройте справочник заново из чата');
   }
   // Явный выбор в приложении важнее диплинка, с которым его открыли
@@ -35,6 +39,7 @@ async function ctx(request: FastifyRequest): Promise<HandbookContext> {
     handbookId: query.handbookId ?? null,
     slug: query.handbook ?? start.slug,
     pageId: query.page ?? (query.handbookId || query.handbook ? null : start.pageId),
+    supplementId: query.handbookId || query.handbook ? null : start.supplementId,
   });
   if (!context) {
     throw new AppError(

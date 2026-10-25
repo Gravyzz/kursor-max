@@ -93,7 +93,7 @@ const checkLayout = async (name, width) => {
         return box.width > 0 && box.height > 0 && css.visibility !== 'hidden' && !inScroller && (box.left < -1 || box.right > maxWidth + 1);
       })
       .map((element) => element.getAttribute('aria-label') || element.textContent?.trim().slice(0, 70) || element.tagName);
-    const nav = document.querySelector('nav[aria-label="Навигация справочника"]');
+    const nav = document.querySelector('nav[aria-label^="Навигация"]');
     const navBox = nav?.getBoundingClientRect();
     const smallTargets = Array.from(nav?.querySelectorAll('button') ?? [])
       .filter((element) => {
@@ -143,7 +143,7 @@ let teamHintChecked = false;
 const checkTeamHint = async () => {
   if (teamHintChecked) return;
   teamHintChecked = true;
-  const hint = app().getByText('публикует страницы, делает объявления и собирает команду.', { exact: false });
+  const hint = app().getByText('публикует страницы и объявления, приглашает редакторов.', { exact: false });
   check('подсказка «Кто что делает» скрыта до нажатия', (await hint.count()) === 0);
   const toggle = app().getByRole('button', { name: /Кто что делает/ });
   await toggle.click();
@@ -157,7 +157,7 @@ const changeRole = async (role) => {
   await page.locator('.kbtn', { hasText: role }).last().click();
   await page.locator('.msg--bot').last().filter({ hasText: 'Вы —' }).waitFor();
   await openTab('Справочник');
-  await dock().getByRole('button', { name: 'Главная', exact: true }).waitFor();
+  await dock().getByRole('button').first().waitFor();
 };
 
 const checkResponsiveTabs = async (tabs, role) => {
@@ -166,7 +166,7 @@ const checkResponsiveTabs = async (tabs, role) => {
     for (const name of tabs) {
       await go(name);
       await app().getByRole('heading', { level: 1 }).first().waitFor();
-      if (['Главная', 'Разделы', 'Поиск'].includes(name)) {
+      if (['Главная', 'Разделы', 'Поиск', 'Просмотр'].includes(name)) {
         const preview = await app().getByText('Предпросмотр со стороны студента', { exact: true }).count();
         check(`${role}, ${name}: пометка предпросмотра соответствует роли`, role === 'Студент' ? preview === 0 : preview === 1);
       }
@@ -193,11 +193,26 @@ try {
   check('страница открылась в мини-приложении', await visible(app().getByRole('heading', { name: 'Как получить зачёт' })));
   await shot('page');
 
-  // 3. Главная: объявление → «Прочитано» → архив
+  // 2а. Команда открывает приложение в «Редакции»: читательские экраны у неё — «Предпросмотр», без дублей в меню
   await openTab('Справочник');
+  const staffTabs = ['Редакция', 'Вопросы', 'Просмотр', 'Профиль'];
+  check('деканат открывает приложение в «Редакции»', await visible(app().getByRole('heading', { name: 'Редакция', exact: true })));
+  check('у деканата меню без главной, разделов и поиска', JSON.stringify(await dock().getByRole('button').evaluateAll((buttons) => buttons.map((button) => button.getAttribute('aria-label') || button.textContent?.trim()))) === JSON.stringify(staffTabs));
+  check('в карточке редакции нет второй кнопки «Предпросмотр»', (await app().locator('.hb-editor-identity').getByRole('button', { name: 'Предпросмотр', exact: true }).count()) === 0);
+  check('в редакции нет вкладки «Вопросы» — она в меню', (await app().getByRole('tab', { name: 'Вопросы', exact: true }).count()) === 0);
+  const pageSearch = app().getByRole('searchbox', { name: 'Найти страницу по названию' });
+  await pageSearch.fill('словарь');
+  check('поиск по названиям страниц в редакции', await visible(app().getByText('Словарь терминов').first()) && (await app().getByText('Как получить зачёт').count()) === 0);
+  await pageSearch.fill('');
+  await go('Просмотр');
+  check('предпросмотр — главная глазами студента', await visible(app().getByRole('heading', { name: 'Справочник ИИТ' })) && await visible(app().getByText('Предпросмотр со стороны студента').first()));
+  await app().getByRole('button', { name: 'Задать вопрос', exact: true }).click();
+  check('в предпросмотре вопрос не отправить: задают только студенты', await visible(app().getByText(/Вопросы задают только студенты/)) && await app().getByRole('textbox', { name: 'Текст вопроса' }).isDisabled());
+  await shot('dean-preview-ask');
+
+  // 3. Читательская часть — глазами студента: объявление → «Прочитано» → архив
+  await changeRole('Студент');
   check('главная справочника', await visible(app().getByRole('heading', { name: 'Справочник ИИТ' })));
-  const staffTabs = ['Главная', 'Разделы', 'Поиск', 'Редакция', 'Профиль'];
-  check('деканату доступны пять вкладок дока', JSON.stringify(await dock().getByRole('button').evaluateAll((buttons) => buttons.map((button) => button.getAttribute('aria-label') || button.textContent?.trim()))) === JSON.stringify(staffTabs));
   check('до первого пункта предлагается начало, а не продолжение', await visible(app().getByText('С чего начать', { exact: true })) && await app().getByText('Продолжить', { exact: true }).count() === 0);
   check('нулевые полосы прогресса на главной скрыты', await app().locator('.hb-home-tile__bar').count() === 0);
   const announcements = await app().locator('section[aria-label="Объявления"] .hb-announce__main .stack > span:first-child').allTextContents();
@@ -324,8 +339,8 @@ try {
   await say('Есть ли в вузе военный учебный центр и как туда поступить?');
   check('вопрос передан дежурному', await visible(page.locator('.msg--bot', { hasText: 'Передал дежурному' })));
 
-  await go('Редакция');
-  await app().getByRole('tab', { name: 'Вопросы', exact: true }).click();
+  await changeRole('Деканат');
+  await go('Вопросы');
   // Ближайший к тексту вопроса блок, в котором есть кнопка «Ответить» — без привязки к классам вёрстки
   const question = app().getByText('военный учебный центр').first();
   check('вопрос виден в бэклоге редактора', await visible(question));
@@ -340,8 +355,9 @@ try {
   await go('Редакция');
   await app().getByRole('tab', { name: 'Объявления', exact: true }).click();
   await app().getByRole('button', { name: 'Новое объявление', exact: true }).click();
-  await app().getByPlaceholder(/Заголовок/).fill('Проверка e2e: сессия');
-  await app().getByPlaceholder(/Что, где и когда/).fill('Опубликовано расписание зимней сессии — подробности на странице.');
+  check('серая кнопка объясняет, чего не хватает', await visible(app().getByText(/^Чтобы опубликовать: напишите заголовок/)));
+  await app().getByRole('textbox', { name: 'Заголовок', exact: true }).fill('Проверка e2e: сессия');
+  await app().getByRole('textbox', { name: 'Текст объявления' }).fill('Опубликовано расписание зимней сессии — подробности на странице.');
   check('у листа есть кнопка «Закрыть»', (await app().getByRole('dialog').getByRole('button', { name: 'Закрыть' }).count()) > 0);
   check('у объявления поля «Показывать с» и «до»', (await app().getByRole('dialog').locator('input[type="date"]').count()) === 2);
   await page.keyboard.press('Escape');
@@ -355,6 +371,12 @@ try {
   check('объявление со ссылкой пришло в чат', await visible(page.locator('.msg--bot', { hasText: 'Проверка e2e: сессия' }), 15_000));
   const announcement = page.locator('.msg--bot', { hasText: 'Проверка e2e: сессия' }).last();
   check('у объявления кнопка «Подробнее»', await visible(announcement.locator('.kbtn', { hasText: 'Подробнее' })));
+
+  // 7а. Объявление удалили в приложении — бот убирает его и из чата
+  await app().getByRole('button', { name: /Проверка e2e: сессия/ }).click();
+  await app().getByRole('button', { name: 'Удалить объявление', exact: true }).click();
+  await app().getByRole('button', { name: 'Точно удалить? Нажмите ещё раз', exact: true }).click();
+  check('удалённое объявление исчезло и из чата', await page.locator('.msg--bot', { hasText: 'Проверка e2e: сессия' }).first().waitFor({ state: 'detached', timeout: 15_000 }).then(() => true, () => false));
 
   // 8. QR-плакат опубликованной страницы
   await go('Редакция');
@@ -434,7 +456,8 @@ try {
   }
   await app().getByRole('button', { name: /Назад/ }).first().click();
 
-  await app().getByRole('group', { name: 'Статус страниц' }).getByRole('button', { name: 'Требует внимания', exact: true }).click();
+  await app().getByRole('group', { name: 'Статус страниц' }).getByRole('button', { name: /^Требует внимания/ }).click();
+  check('у фильтров видно, сколько в них страниц', /Требует внимания\s*\d+/.test(await app().getByRole('group', { name: 'Статус страниц' }).getByRole('button', { name: /^Требует внимания/ }).textContent()));
   check('проблемная страница выделена и поднята первой', (await app().locator('.hb-editor-page-row').first().textContent()).includes('Как получить зачёт'));
   const collapse = app().locator('.hb-section-toggle').first();
   await collapse.click();
@@ -443,9 +466,9 @@ try {
   await shot('editor-attention');
 
   // Фильтры редактора и аналитика используют данные сервера после всех предыдущих действий.
-  await app().getByRole('group', { name: 'Статус страниц', exact: true }).getByRole('button', { name: 'Опубликованы', exact: true }).click();
+  await app().getByRole('group', { name: 'Статус страниц', exact: true }).getByRole('button', { name: /^Опубликованы/ }).click();
   check('фильтр опубликованных страниц исключает черновики', (await app().getByRole('button', { name: /Опубликована/ }).count()) > 0 && (await app().getByRole('button', { name: /Черновик/ }).count()) === 0);
-  await app().getByRole('group', { name: 'Статус страниц', exact: true }).getByRole('button', { name: 'Все', exact: true }).click();
+  await app().getByRole('group', { name: 'Статус страниц', exact: true }).getByRole('button', { name: /^Все\s*\d*$/ }).click();
   await app().getByRole('button', { name: 'Аналитика', exact: true }).click();
   check('экран аналитики открыт', await visible(app().getByRole('heading', { name: 'Аналитика', exact: true })));
   check('аналитика показывает реальные показатели и цели', await visible(app().getByText('Нашли ответ сами', { exact: true })) && await visible(app().getByText('Проверено за полгода', { exact: true })));
@@ -454,6 +477,7 @@ try {
   await openTeam();
   await checkTeamHint();
   await app().getByRole('button', { name: 'Пригласить в команду', exact: true }).click();
+  check('у «Кто это» есть пояснение, чем студсовет отличается от сотрудника', await visible(app().getByText(/права задаются ниже/)));
   const testMember = 'Тестовая Участница E2E';
   await app().getByLabel('Имя и фамилия', { exact: true }).fill(testMember);
   await app().getByRole('button', { name: 'Создать ссылку', exact: true }).click();
@@ -470,6 +494,11 @@ try {
   check('профиль не повторяет док и не требует завершения', await app().getByRole('button', { name: /^(Управление командой|Страницы и вопросы студентов|Готово)$/ }).count() === 0);
   check('студенческие поля скрыты в профиле деканата', (await app().getByRole('heading', { name: 'Курс', exact: true }).count()) === 0);
   check('лишний текст профиля удалён', (await app().getByText(/От этого зависит, что вы увидите/).count()) === 0);
+  await app().getByRole('button', { name: /Справочники факультета/ }).click();
+  check('деканат управляет справочниками факультета', await visible(app().getByRole('heading', { name: 'Справочники факультета', exact: true })));
+  check('единственный справочник факультета закрыть нельзя', await visible(app().getByText(/Единственный справочник факультета/).first()));
+  check('при создании — выбор, подключать ли общие страницы', await visible(app().getByRole('radio', { name: /Без общих страниц/ })));
+  await go('Профиль');
   await shot('dean-profile');
   await openTeam();
   check('новая роль сохраняется после повторного открытия команды', await visible(memberCard.getByText(/^Администратор ·/)));
@@ -481,8 +510,38 @@ try {
 
   await checkResponsiveTabs(staffTabs, 'Деканат');
 
+  // 8г. Сроки для студентов: список и новый срок прямо на странице; файл загружается в блок «Файл», а не ссылкой
+  await go('Редакция');
+  await app().getByRole('button', { name: 'Сроки для студентов', exact: true }).click();
+  check('у команды есть экран сроков', await visible(app().getByRole('heading', { name: 'Сроки для студентов', exact: true })));
+  check('видно сроки, которые уже видят студенты', await visible(app().getByRole('heading', { name: /^Видят студенты/ })));
+  await shot('team-deadlines');
+  await app().getByRole('button', { name: /Новый срок/ }).click();
+  const deadlinePage = app().getByRole('dialog').locator('select');
+  const deadlineOptions = await deadlinePage.locator('option').allTextContents();
+  const publishedPage = deadlineOptions.find((text, index) => index > 0 && !/черновик/.test(text));
+  await deadlinePage.selectOption({ label: publishedPage });
+  await app().getByRole('dialog').getByRole('button', { name: 'Добавить срок на страницу', exact: true }).click();
+  check('страница открылась сразу с блоком «Срок»', await visible(app().getByLabel('Что нужно успеть')));
+  await app().getByLabel('Что нужно успеть').fill('Сдать заявление — E2E');
+  await app().getByRole('button', { name: /Добавить блок/ }).click();
+  await app().getByRole('dialog').getByRole('button', { name: /^Файл/ }).click();
+  check('в блоке «Файл» нет поля для ссылки', (await app().getByRole('textbox', { name: 'Ссылка' }).count()) === 0);
+  await app().locator('input[type="file"]').setInputFiles({ name: 'Заявление.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4\n% e2e\n') });
+  check('файл загружен прямо в блок', await visible(app().locator('.hb-file-chosen').getByText('Заявление.pdf', { exact: true })));
+  check('название блока подставилось из имени файла', await app().locator('.hb-editblock--open').last().locator('input.hb-input').first().inputValue() === 'Заявление');
+  await shot('file-block');
+  check('правки со сроком и файлом сохранены', await visible(app().getByText(/Правки сохранены/), 8000));
+  await app().getByRole('button', { name: /Назад/ }).first().click();
+  check('новый срок виден как ещё не опубликованный', await visible(app().getByText('Сдать заявление — E2E', { exact: true })) && await visible(app().getByRole('heading', { name: /^Ещё не видят студенты/ })));
+  await app().getByRole('button', { name: /Назад/ }).first().click();
+  check('неопубликованные правки подсвечены в редакции', await visible(app().locator('.hb-unpublished').first()));
+  await shot('editor-unpublished');
+
   // 9. Редактор работает со страницами и вопросами, но не получает административные действия.
   await changeRole('Редактор');
+  check('редактор открывает приложение в «Редакции»', await visible(app().getByRole('heading', { name: 'Редакция', exact: true })));
+  await go('Просмотр');
   check('главная редактора помечена как предпросмотр', await visible(app().getByText('Предпросмотр со стороны студента', { exact: true })));
   await go('Профиль');
   check('профиль редактора показывает рабочие действия', await visible(app().getByRole('button', { name: 'Аналитика справочника', exact: true })));
@@ -490,8 +549,8 @@ try {
   await app().getByRole('button', { name: /^Предпросмотр студента/ }).click();
   check('параметры предпросмотра можно раскрыть', await visible(app().getByRole('heading', { name: 'Курс', exact: true })));
   await go('Редакция');
-  await app().getByRole('tab', { name: 'Страницы', exact: true }).waitFor();
-  check('редактор видит вкладку вопросов', await visible(app().getByRole('tab', { name: 'Вопросы', exact: true })));
+  await app().getByRole('searchbox', { name: 'Найти страницу по названию' }).waitFor();
+  check('редактор видит вопросы студентов в меню', await visible(dock().getByRole('button', { name: 'Вопросы', exact: true })));
   check('редактор не видит вкладку объявлений', (await app().getByRole('tab', { name: 'Объявления', exact: true }).count()) === 0);
   await app().getByText('Словарь терминов').first().click();
   await visible(app().getByLabel('Коротко о чём'));
@@ -500,9 +559,25 @@ try {
   await app().getByLabel('Коротко о чём').fill('Правки редактора для проверки статуса');
   await app().getByRole('button', { name: 'На проверку', exact: true }).click();
   await app().getByRole('dialog').getByRole('button', { name: 'Отправить на проверку', exact: true }).click();
-  check('редактор действительно отправляет страницу на проверку', await visible(app().getByText('Страница ожидает проверки. Публикация доступна администратору.', { exact: true })));
+  check('редактор действительно отправляет страницу на проверку', await visible(app().getByText(/^Вы отправили страницу администратору/)));
+  check('у страницы есть справка по статусам', await visible(app().getByRole('button', { name: 'Что значат статусы и как их снять' })));
   await shot('editor-review');
   await app().getByRole('button', { name: /Назад/ }).first().click();
+  check('у редактора «на проверке» не считается «требует внимания»', (await app().getByText('На проверке · ждёт вашей публикации').count()) === 0);
+
+  // Редактор дописывает уточнение к общей странице и отправляет его деканату — раньше оно молча оставалось черновиком
+  await app().getByRole('button', { name: /^Из общей базы/ }).click();
+  check('справка по статусам — одна кнопка, без дубля в общих страницах', (await app().getByRole('button', { name: /Что значат статусы/ }).count()) === 1);
+  await app().locator('.hb-editor-page-row').filter({ hasNotText: /С уточнением|Своя версия|Черновик|ждёт/ }).first().click();
+  await app().getByRole('button', { name: 'Добавить уточнение' }).click();
+  await app().getByRole('dialog').getByText('Текст', { exact: true }).click();
+  await app().locator('.hb-local-editor textarea').first().fill('В ИИТ справку выдают в каб. 214 — E2E');
+  check('редактор отправляет уточнение на проверку', await visible(app().getByRole('button', { name: 'На проверку', exact: true })));
+  await app().getByRole('button', { name: 'На проверку', exact: true }).click();
+  await app().getByRole('dialog').getByRole('button', { name: 'Отправить на проверку', exact: true }).click();
+  check('уточнение ждёт публикации администратором', await visible(app().getByText('Отправлено на публикацию', { exact: true })));
+  await app().getByRole('button', { name: /Назад/ }).first().click();
+  await app().getByRole('button', { name: /^Все\s*\d*$/ }).click();
   await openTeam();
   await app().getByRole('heading', { name: 'Команда', exact: true }).waitFor();
   check('редактор не приглашает участников', (await app().getByRole('button', { name: /Пригласить/ }).count()) === 0);
@@ -511,7 +586,10 @@ try {
   // Редактор не управляет чужим справочником как администратор, но может пройти
   // весь путь создания нового справочника в личной демо-песочнице.
   await go('Редакция');
-  await app().getByRole('button', { name: 'Справочники', exact: true }).click();
+  check('в редакции нет второй кнопки «Справочники»', (await app().getByRole('button', { name: 'Справочники', exact: true }).count()) === 0);
+  await go('Профиль');
+  await app().getByRole('button', { name: /Другие справочники/ }).click();
+  check('выбор справочников подписан как только демо', await visible(app().getByText(/Только для демонстрации/)));
   check('редактору доступно создание справочника в демо', await visible(app().getByRole('button', { name: 'Новый справочник' })));
   await app().getByRole('button', { name: 'Новый справочник' }).click();
   await app().getByRole('textbox', { name: 'Название', exact: true }).fill('Справочник стажировок E2E');
@@ -533,6 +611,26 @@ try {
   check('редактирование не создаёт дубликат раздела', await app().getByText('Стажировки и практика', { exact: true }).count() === 1);
   await shot('new-handbook');
 
+  // Ненужный справочник деканат закрывает и возвращает: студенты не видят его, пока он закрыт
+  await changeRole('Деканат');
+  const openManage = async () => {
+    await go('Профиль');
+    await app().getByRole('button', { name: /Справочники факультета/ }).click();
+    await app().getByRole('heading', { name: 'Справочники факультета', exact: true }).waitFor();
+  };
+  await openManage();
+  const stagings = app().locator('.hb-handbook-manage', { hasText: 'Справочник стажировок E2E' });
+  check('второй справочник факультета можно закрыть', await visible(stagings.getByRole('button', { name: 'Закрыть справочник', exact: true })));
+  await stagings.getByRole('button', { name: 'Закрыть справочник', exact: true }).click();
+  await app().getByRole('dialog').getByRole('button', { name: 'Закрыть справочник', exact: true }).click();
+  // Закрыли открытый сейчас справочник — приложение переходит в другой справочник факультета
+  await page.waitForTimeout(1000);
+  if (!(await visible(app().locator('.hb-handbook-manage--closed'), 2000))) await openManage();
+  check('закрытый справочник — в «Закрытых» с датой возврата', await visible(app().locator('.hb-handbook-manage--closed', { hasText: 'Справочник стажировок E2E' })));
+  await shot('dean-closed-handbook');
+  await app().locator('.hb-handbook-manage--closed', { hasText: 'Справочник стажировок E2E' }).getByRole('button', { name: 'Вернуть справочник' }).click();
+  check('закрытый справочник возвращается', await visible(app().locator('.hb-handbook-manage:not(.hb-handbook-manage--closed)', { hasText: 'Справочник стажировок E2E' })));
+
   // 10. Роль «Студент»: редактор закрыт, данные на месте.
   await changeRole('Студент');
   check('бот подтвердил роль студента', await visible(page.locator('.msg--bot', { hasText: 'Вы — студент' })));
@@ -546,8 +644,7 @@ try {
   check('студент видит свой курс', await visible(app().getByRole('heading', { name: 'Курс', exact: true })) && await visible(app().getByRole('slider', { name: 'Курс' })));
   check('в общежитии только «Да» и «Нет»', JSON.stringify(await app().getByRole('radiogroup', { name: 'Живу в общежитии' }).getByRole('radio').allTextContents()) === JSON.stringify(['Да', 'Нет']));
   check('студент не видит рабочие действия команды', (await app().getByRole('heading', { name: 'Работа со справочником', exact: true }).count()) === 0);
-  const program = app().getByRole('textbox', { name: 'Направление или программа' });
-  await program.fill('Тестовая программа');
+  check('студенту не нужно вводить направление: факультет уже известен', (await app().getByRole('textbox', { name: 'Направление или программа' }).count()) === 0);
   // Курс — шкала: двигаем ползунок и отпускаем (сохранение — по отпусканию, а не на каждом делении)
   const course = app().getByRole('slider', { name: 'Курс' });
   await course.fill('2');
@@ -556,7 +653,7 @@ try {
   await app().getByText('Сохранено — справочник уже показывает ваше', { exact: true }).waitFor();
   await openTab('Справочник');
   await go('Профиль');
-  check('программа сохраняется вместе с быстрыми изменениями курса и общежития', await program.inputValue() === 'Тестовая программа' && await app().getByRole('slider', { name: 'Курс' }).inputValue() === '2' && await app().getByRole('radiogroup', { name: 'Живу в общежитии' }).getByRole('radio', { name: 'Нет', exact: true }).getAttribute('aria-checked') === 'true');
+  check('курс и общежитие сохраняются', await app().getByRole('slider', { name: 'Курс' }).inputValue() === '2' && await app().getByRole('radiogroup', { name: 'Живу в общежитии' }).getByRole('radio', { name: 'Нет', exact: true }).getAttribute('aria-checked') === 'true');
   await app().getByRole('radiogroup', { name: 'Тема оформления' }).scrollIntoViewIfNeeded();
   const tops = await app().getByRole('radiogroup', { name: 'Тема оформления' }).getByRole('radio').evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().top));
   check('три темы находятся в одной строке', Math.max(...tops) - Math.min(...tops) < 2);
@@ -564,6 +661,93 @@ try {
   await openTab('Редактор');
   check('редактор закрыт для студента', await visible(app().getByText('Раздел для команды справочника')));
   await shot('student');
+
+  // 11. Студент ИИТ видит общую справку вместе с уточнением своего факультета
+  await say('справка об обучении');
+  await lastBot().locator('.kbtn', { hasText: 'Открыть страницу' }).click();
+  check('студент: общая страница открылась', await visible(app().getByRole('heading', { name: 'Справка об обучении' })));
+  check('студент: уточнение «В ИИТ» с кабинетом 214 внутри общей страницы', await visible(app().locator('.hb-local', { hasText: '214' })) && await visible(app().getByText('В ИИТ', { exact: true })));
+  check('студент: подпись источника — общая инструкция университета', await visible(app().getByText(/общая инструкция университета/)));
+  await shot('student-shared-page');
+
+  // 12. Роль «Университет»: кабинет, общая база, влияние правки, подключение факультета
+  await page.locator('.kbtn', { hasText: 'Сменить роль' }).last().click();
+  await visible(page.locator('.kbtn', { hasText: 'Университет' }));
+  await page.locator('.kbtn', { hasText: 'Университет' }).last().click();
+  check('бот подтвердил роль университета', await visible(page.locator('.msg--bot', { hasText: 'администратор университета' })));
+  check('в чате есть кнопка «Кабинет университета»', await visible(lastBot().locator('.kbtn', { hasText: 'Кабинет университета' })));
+  const uniDock = () => app().getByRole('navigation', { name: 'Навигация кабинета университета' });
+  check('кабинет открылся на обзоре', await visible(app().getByRole('heading', { name: 'Обзор', exact: true }), 15_000));
+  const uniTabs = ['Обзор', 'База', 'Факультеты', 'Профиль'];
+  check('у университета четыре вкладки дока', JSON.stringify(await uniDock().getByRole('button').evaluateAll((buttons) => buttons.map((button) => button.getAttribute('aria-label')))) === JSON.stringify(uniTabs));
+  check('обзор: блок «Требует внимания»', await visible(app().getByRole('region', { name: 'Требует внимания' })));
+  check('обзор: подключено два факультета', await visible(app().getByText('факультета подключено', { exact: true })));
+  await setAppWidth(375);
+  await shot('university-overview');
+  for (const width of [320, 375, 430]) {
+    await setAppWidth(width);
+    for (const name of uniTabs) {
+      await uniDock().getByRole('button', { name, exact: true }).click();
+      await app().getByRole('heading', { level: 1 }).first().waitFor();
+      await app().locator('.skeleton').first().waitFor({ state: 'detached', timeout: 8000 }).catch(() => undefined);
+      await checkLayout(`Университет, ${name}`, width);
+    }
+  }
+  await setAppWidth(375);
+  await uniDock().getByRole('button', { name: 'База', exact: true }).click();
+  check('база: единые инструкции вуза', await visible(app().getByRole('heading', { name: 'Единые инструкции вуза' })));
+  await shot('university-base');
+  await app().locator('.hb-editor-page-row', { hasText: 'Справка об обучении' }).first().click();
+  check('общая страница: видно, какие факультеты её используют', await visible(app().getByText('Страницу видят студенты 2 факультетов', { exact: true })));
+  check('общая страница: уточнения ИИТ и ЭФ перечислены', await visible(app().locator('.hb-impact__list li', { hasText: '214' })) && await visible(app().locator('.hb-impact__list li', { hasText: '305' })));
+  check('общая страница: карточка ответственного', await visible(app().getByRole('region', { name: /Кто отвечает/ }).or(app().getByText('Кто отвечает', { exact: false }))));
+  check('у общей страницы выбор факультетов: по умолчанию все', await app().getByRole('button', { name: 'Все факультеты' }).getAttribute('aria-pressed') === 'true');
+  await app().getByRole('button', { name: 'Что значат эти статусы' }).click();
+  check('справка по статусам открывается', await visible(app().getByRole('dialog').getByText('Своя версия · нужно сверить')));
+  await app().getByRole('dialog').getByRole('button', { name: 'Закрыть' }).first().click();
+  await app().getByRole('region', { name: 'Кто видит страницу' }).scrollIntoViewIfNeeded();
+  await shot('university-impact');
+  check('у общей страницы нет QR-плаката: студенты читают её в справочнике факультета', (await app().getByRole('button', { name: 'QR-плакат' }).count()) === 0);
+  await app().getByRole('button', { name: 'Назад: Общая база' }).first().click();
+  check('из страницы базы — назад к списку, док кабинета на месте', await visible(uniDock()));
+  await uniDock().getByRole('button', { name: 'Факультеты', exact: true }).click();
+  check('факультеты: ИИТ и ЭФ', await visible(app().getByText('Институт информационных технологий', { exact: false })) && await visible(app().getByText(/Экономическ/).first()));
+  // Предпросмотр «глазами студента»: заголовок главной лежит на фото, а не съезжает с него
+  await app().getByRole('button', { name: 'Открыть как студент' }).first().click();
+  await app().getByRole('button', { name: 'Кабинет университета' }).waitFor();
+  const heroFit = await (await appFrame()).evaluate(() => {
+    const cover = document.querySelector('.hb-reader-hero .hb-cover')?.getBoundingClientRect();
+    const sub = document.querySelector('.hb-reader-hero .hb-hero__sub')?.getBoundingClientRect();
+    return cover && sub ? { cover: Math.round(cover.bottom), sub: Math.round(sub.bottom) } : null;
+  });
+  check('глазами студента: заголовок и подпись на фото', Boolean(heroFit && heroFit.sub <= heroFit.cover), JSON.stringify(heroFit));
+  await app().getByRole('button', { name: 'Кабинет университета' }).click();
+  await uniDock().getByRole('button', { name: 'Факультеты', exact: true }).click();
+  await app().getByRole('button', { name: 'Подключить факультет' }).first().click();
+  const examples = await app().getByRole('dialog').locator('input.hb-input').evaluateAll((inputs) => inputs.map((input) => input.getAttribute('placeholder') ?? ''));
+  check('подсказки в форме факультета — примеры, а не значения', examples.length === 3 && examples.every((text) => text.startsWith('Например:')), examples.join(' | '));
+  check('пустую форму факультета нельзя отправить', await app().getByRole('button', { name: 'Создать и получить ссылку' }).isDisabled());
+  await app().getByRole('textbox', { name: 'Название' }).fill('Юридический институт');
+  await app().getByRole('textbox', { name: /Коротко/ }).fill('ЮИ');
+  await app().getByRole('textbox', { name: /Администратор факультета/ }).fill('Морозова Ирина Олеговна');
+  await app().getByRole('button', { name: 'Создать и получить ссылку' }).click();
+  check('подключение факультета: личная ссылка администратору', await visible(app().getByRole('textbox', { name: /Личная ссылка для/ })));
+  await shot('university-new-faculty');
+  await app().getByRole('dialog').getByRole('button', { name: 'Закрыть' }).first().click();
+  check('ЮИ появился в списке', await visible(app().getByText('Юридический институт', { exact: true })));
+  const ui = app().locator('.uni-faculty', { hasText: 'Юридический институт' });
+  await ui.getByRole('button', { name: 'Отключить факультет' }).click();
+  const disable = app().getByRole('dialog').getByRole('button', { name: 'Отключить факультет' });
+  check('отключение факультета требует вписать название', await disable.isDisabled());
+  await app().getByRole('dialog').getByRole('textbox').fill('ЮИ');
+  await disable.click();
+  check('отключённый факультет — в «Отключённых»', await visible(app().locator('.uni-faculty--closed', { hasText: 'Юридический институт' })));
+  await shot('university-closed-faculty');
+  await app().locator('.uni-faculty--closed', { hasText: 'Юридический институт' }).getByRole('button', { name: 'Восстановить факультет' }).click();
+  check('факультет восстанавливается одним нажатием', await visible(app().locator('.uni-faculty:not(.uni-faculty--closed)', { hasText: 'Юридический институт' })));
+  await uniDock().getByRole('button', { name: 'Профиль', exact: true }).click();
+  check('в профиле кабинета есть выбор темы', await visible(app().getByRole('radiogroup', { name: 'Тема оформления' })));
+  check('в профиле кабинета — справка по общей базе и нет плашки предпросмотра', await visible(app().getByRole('button', { name: /Как работает общая база/ })) && (await app().getByText('Как его видят студенты').count()) === 0);
 } catch (error) {
   check('сценарий прошёл без исключений', false, error?.stack ?? error);
   await shot('failure').catch(() => undefined);

@@ -7,6 +7,7 @@ import { dateTime } from '../../lib/format';
 import { readDraft, writeDraft } from '../../lib/drafts';
 import type { HandbookQuestion } from '../../lib/types';
 import { EmptyState, ErrorState, SectionTitle, Skeletons } from '../../components/ui';
+import { Icon } from '../../components/icons';
 
 /**
  * Вопрос дежурному. Набранный текст — черновик: «Назад» или свайп его не стирают,
@@ -14,6 +15,8 @@ import { EmptyState, ErrorState, SectionTitle, Skeletons } from '../../component
  */
 export function HandbookAsk({ q }: { q?: string }) {
   const hb = useHandbook();
+  // Вопросы дежурному задают студенты: команда видит этот экран в предпросмотре, но отправить отсюда не может
+  const team = Boolean(hb.editorRole) || hb.person?.role === 'dean' || Boolean(hb.openUniversity);
   const { data, error, loading, reload } = useLoad(
     (signal) => api<{ questions: HandbookQuestion[] }>(hb.url('/api/handbook/questions'), { signal }),
     [hb.handbookId],
@@ -57,6 +60,13 @@ export function HandbookAsk({ q }: { q?: string }) {
         </p>
       </div>
 
+      {team ? (
+        <div className="hb-alert" role="note">
+          <span className="hb-block__icon" aria-hidden="true"><Icon name="info" /></span>
+          <span className="small">Так этот экран видит студент. Вопросы задают только студенты — {hb.editorRole ? 'ответить на них можно во вкладке «Вопросы»' : 'отвечает команда справочника'}.</span>
+        </div>
+      ) : null}
+
       <form className="card hb-block hb-reader-ask" onSubmit={(event) => { event.preventDefault(); void send(); }}>
         <label className="field__label" htmlFor="reader-question">Ваш вопрос</label>
         <textarea
@@ -67,6 +77,7 @@ export function HandbookAsk({ q }: { q?: string }) {
           maxLength={1000}
           minLength={5}
           required
+          disabled={team}
           onChange={(event) => setText(event.target.value)}
           placeholder="Например: можно ли перевестись с платного на бюджет и когда подавать заявление?"
           aria-label="Текст вопроса"
@@ -76,7 +87,7 @@ export function HandbookAsk({ q }: { q?: string }) {
         {openCount >= 5 ? <p className="small hb-error" role="status">У вас уже 5 открытых вопросов. Дождитесь ответа дежурного.</p> : null}
         <div className="row row--between">
           <span className="faint small num">{text.length}/1000</span>
-          <Button type="submit" variant="primary" size="medium" loading={sending} disabled={openCount >= 5 || text.trim().length < 5}>
+          <Button type="submit" variant="primary" size="medium" loading={sending} disabled={team || openCount >= 5 || text.trim().length < 5}>
             Отправить
           </Button>
         </div>
@@ -85,7 +96,7 @@ export function HandbookAsk({ q }: { q?: string }) {
       {loading && !data ? <Skeletons count={2} /> : null}
       {error && !data ? <ErrorState error={error} onRetry={reload} /> : null}
 
-      {data && data.questions.length > 0 ? (
+      {data && data.questions.length > 0 && !team ? (
         <>
           <SectionTitle>Мои вопросы</SectionTitle>
           <div className="stack">
@@ -110,7 +121,7 @@ export function HandbookAsk({ q }: { q?: string }) {
         </>
       ) : null}
 
-      {data && data.questions.length === 0 && !loading ? (
+      {data && data.questions.length === 0 && !loading && !team ? (
         <EmptyState icon="chat" title="Вопросов пока не было">
           Спрашивайте что угодно про учёбу, документы и быт — это анонимно для других студентов.
         </EmptyState>

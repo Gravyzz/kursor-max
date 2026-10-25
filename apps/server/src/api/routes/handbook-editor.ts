@@ -3,15 +3,22 @@ import { z } from 'zod';
 import { one, pool } from '../../db/pool.js';
 import { AppError, forbidden, notFound } from '../../lib/errors.js';
 import { uuidParam } from '../server.js';
-import { contextFor, findHandbook, membership } from '../../services/handbook.js';
+import { baseHandbook, contextFor, findHandbook, membership } from '../../services/handbook.js';
+import { uploadFile, uploadSchema } from '../../services/files.js';
 import {
   addMember, analytics, announce, announcementSchema, announcementUpdateSchema, answerQuestion, archivePage, createHandbook, deleteAnnouncement,
   inviteEditor, inviteSchema, listAnnouncements, updateAnnouncement,
-  createPage, editorStructure, handbookInputSchema, listMembers, pageForEditor,
+  createPage, editorStructure, handbookInputSchema, listMembers,
+  teamPowers, editorDeadlines, pageForEditor,
   pageInputSchema, pageVersionSchema, parsePageDraft, publishPage, removeMember, returnPage, returnPageSchema, saveDraft, sectionInputSchema,
-  createSection, sectionPatchSchema, submitForReview, updateSection,
+  createSection, sectionPatchSchema, submitForReview, updateSection, verifyPage, setOwnership, ownershipSchema, setFacultyScope, facultyScopeSchema,
   type EditorScope,
 } from '../../services/handbook-editor.js';
+import {
+  ackOverride, archiveSupplement, baseUsage, compareOverride, createOverride, overrideInputSchema, pageImpact, publishSupplement,
+  revertOverride, saveSupplement, sharedBaseId, sharedForFaculty, sharedPage, submitSupplement, supplementInputSchema, supplementReviewSchema,
+} from '../../services/shared.js';
+import { RETENTION_DAYS, closeHandbook, manageableHandbooks, reopenHandbook } from '../../services/lifecycle.js';
 
 /**
  * Редактор справочника: студсовет, тьюторы и деканат ведут содержимое с телефона.
@@ -70,12 +77,52 @@ export function registerHandbookEditorRoutes(app: FastifyInstance) {
     );
   });
 
+  // Справочники факультета, которыми человек управляет, — с закрытыми, пока их можно вернуть
+  app.get('/api/handbook-editor/handbooks', async (request) => {
+    if (!request.actor) throw new AppError('unauthorized', 'Нужен вход через MAX', 401);
+    const person = request.actor.person;
+    return {
+      handbooks: await manageableHandbooks(pool, request.actor.user),
+      retentionDays: RETENTION_DAYS,
+      /** Есть ли у вуза общая база: только тогда при создании справочника есть выбор «подключить общие страницы». */
+      hasBase: person ? Boolean(await baseHandbook(pool, person.universityId)) : false,
+    };
+  });
+
+  app.post('/api/handbook-editor/handbooks/:id/close', async (request) => {
+    if (!request.actor) throw new AppError('unauthorized', 'Нужен вход через MAX', 401);
+    const { id } = uuidParam.parse(request.params);
+    return closeHandbook(pool, request.actor.user, id);
+  });
+
+  app.post('/api/handbook-editor/handbooks/:id/reopen', async (request) => {
+    if (!request.actor) throw new AppError('unauthorized', 'Нужен вход через MAX', 401);
+    const { id } = uuidParam.parse(request.params);
+    return reopenHandbook(pool, request.actor.user, id);
+  });
+
+  // Файл для блока «Файл»: до 10 МБ, в base64 — поэтому тело запроса больше обычного
+  app.post('/api/handbook-editor/files', { bodyLimit: 15 * 1024 * 1024 }, async (request) => uploadFile(pool, await scope(request), uploadSchema.parse(request.body)));
+
+  // Сроки для студентов: блоки «Срок» опубликованных страниц и черновые, которые студенты ещё не видят
+  app.get('/api/handbook-editor/deadlines', async (request) => editorDeadlines(pool, await scope(request)));
+
   app.get('/api/handbook-editor/structure', async (request) => {
     const editor = await scope(request);
+    const isBase = editor.handbook.institute_id === null;
     return {
-      handbook: { id: editor.handbook.id, slug: editor.handbook.slug, title: editor.handbook.title, emoji: editor.handbook.emoji },
+      handbook: {
+        id: editor.handbook.id, slug: editor.handbook.slug, title: editor.handbook.title, emoji: editor.handbook.emoji,
+        /** Общая база университета: редактор показывает ответственных, сроки и кто использует страницу. */
+        isBase,
+        hasBase: Boolean(editor.handbook.parent_id),
+      },
       role: editor.role,
       sections: await editorStructure(pool, editor),
+      /** Общие страницы над справочником факультета — в тех же разделах, что видит студент. */
+      shared: isBase ? [] : await sharedForFaculty(pool, editor),
+      /** Для общей базы: сколько факультетов показывают страницу, уточнения, свои версии. */
+      usage: isBase ? await baseUsage(pool, editor.handbook.id) : {},
     };
   });
 
@@ -136,6 +183,97 @@ export function registerHandbookEditorRoutes(app: FastifyInstance) {
     return archivePage(pool, editor, id);
   });
 
+  // Ответственный подтверждает, что страница актуальна, без новой публикации
+  app.post('/api/handbook-editor/pages/:id/verify', async (request) => {
+    const editor = await scope(request);
+    const { id } = uuidParam.parse(request.params);
+    return verifyPage(pool, editor, id);
+  });
+
+  app.patch('/api/handbook-editor/pages/:id/ownership', async (request) => {
+    const editor = await scope(request);
+    const { id } = uuidParam.parse(request.params);
+    return setOwnership(pool, editor, id, ownershipSchema.parse(request.body ?? {}));
+  });
+
+  // Для каких факультетов общая страница
+  app.patch('/api/handbook-editor/pages/:id/faculties', async (request) => {
+    const editor = await scope(request);
+    const { id } = uuidParam.parse(request.params);
+    return setFacultyScope(pool, editor, id, facultyScopeSchema.parse(request.body ?? {}));
+  });
+
+  // Кто использует общую страницу: факультеты, уточнения, свои версии
+  app.get('/api/handbook-editor/pages/:id/impact', async (request) => {
+    const editor = await scope(request);
+    const { id } = uuidParam.parse(request.params);
+    if (editor.handbook.institute_id !== null) throw new AppError('not_base', 'Влияние считается только для страниц общей базы', 409);
+    return pageImpact(pool, editor.handbook.id, id);
+  });
+
+  app.get('/api/handbook-editor/pages/:id/compare', async (request) => {
+    const editor = await scope(request);
+    const { id } = uuidParam.parse(request.params);
+    return compareOverride(pool, editor, id);
+  });
+
+  app.post('/api/handbook-editor/pages/:id/override/ack', async (request) => {
+    const editor = await scope(request);
+    const { id } = uuidParam.parse(request.params);
+    return ackOverride(pool, editor, id);
+  });
+
+  app.post('/api/handbook-editor/pages/:id/override/revert', async (request) => {
+    const editor = await scope(request);
+    const { id } = uuidParam.parse(request.params);
+    return revertOverride(pool, editor, id);
+  });
+
+  // Общая страница в редакторе факультета: общая часть, уточнение, своя версия
+  app.get('/api/handbook-editor/shared/:id', async (request) => {
+    const editor = await scope(request);
+    const { id } = uuidParam.parse(request.params);
+    const baseId = await sharedBaseId(pool, editor, id);
+    return sharedPage(pool, editor, baseId);
+  });
+
+  app.put('/api/handbook-editor/shared/:id/supplement', async (request) => {
+    const editor = await scope(request);
+    const { id } = uuidParam.parse(request.params);
+    const baseId = await sharedBaseId(pool, editor, id);
+    return saveSupplement(pool, editor, baseId, supplementInputSchema.parse(request.body));
+  });
+
+  app.post('/api/handbook-editor/shared/:id/supplement/review', async (request) => {
+    const editor = await scope(request);
+    const { id } = uuidParam.parse(request.params);
+    const baseId = await sharedBaseId(pool, editor, id);
+    const body = supplementReviewSchema.parse(request.body ?? {});
+    return submitSupplement(pool, editor, baseId, body.note ?? null);
+  });
+
+  app.post('/api/handbook-editor/shared/:id/supplement/publish', async (request) => {
+    const editor = await scope(request);
+    const { id } = uuidParam.parse(request.params);
+    const baseId = await sharedBaseId(pool, editor, id);
+    return publishSupplement(pool, editor, baseId);
+  });
+
+  app.post('/api/handbook-editor/shared/:id/supplement/archive', async (request) => {
+    const editor = await scope(request);
+    const { id } = uuidParam.parse(request.params);
+    const baseId = await sharedBaseId(pool, editor, id);
+    return archiveSupplement(pool, editor, baseId);
+  });
+
+  app.post('/api/handbook-editor/shared/:id/override', async (request) => {
+    const editor = await scope(request);
+    const { id } = uuidParam.parse(request.params);
+    const baseId = await sharedBaseId(pool, editor, id);
+    const body = overrideInputSchema.parse(request.body ?? {});
+    return createOverride(pool, editor, baseId, body.reason);
+  });
+
   app.get('/api/handbook-editor/analytics', async (request) => analytics(pool, await scope(request)));
 
   app.post('/api/handbook-editor/questions/:id/answer', async (request) => {
@@ -171,7 +309,7 @@ export function registerHandbookEditorRoutes(app: FastifyInstance) {
 
   app.get('/api/handbook-editor/members', async (request) => {
     const editor = await scope(request);
-    return { members: await listMembers(pool, editor), role: editor.role };
+    return { members: await listMembers(pool, editor), role: editor.role, ...(await teamPowers(pool, editor)) };
   });
 
   app.post('/api/handbook-editor/members', async (request) => {

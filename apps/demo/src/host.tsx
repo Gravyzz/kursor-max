@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { createRoot } from 'react-dom/client';
 import './host.css';
 import { boot, restart, STAGES, type Stage } from './boot';
+import { openDemoFile } from './backend/files';
 import { chat, flushNotifications, pressButton, sendText, startBot, type ChatMessage, type InlineButton } from './backend/chat';
 import { handleApi } from './backend/router';
 import { setLaunchParam } from './backend/auth';
@@ -271,7 +272,15 @@ function Host() {
         if (method !== 'GET') void flushNotifications();
         return new Response(JSON.stringify(result.body), { status: result.status, headers: { 'content-type': 'application/json' } });
       },
-      openLink: (url) => setLink(url),
+      openLink: (url) => {
+        // Файл из блока «Файл» лежит в базе демо — открываем его, а не показываем вымышленную ссылку
+        const file = /\/api\/files\/([0-9a-f-]{36})/i.exec(url);
+        if (file) {
+          void openDemoFile(file[1]!).then((ok) => { if (!ok) setLink(url); });
+          return;
+        }
+        setLink(url);
+      },
     };
   }, []);
 
@@ -297,7 +306,7 @@ function Host() {
       if (button.type === 'callback') {
         // Роль или сброс демо меняют то, что видно в мини-приложении, — перезапускаем его
         void pressButton(button.payload, button.text).then(() => {
-          if (/^demo:(as:|reset)/.test(button.payload)) openApp('hb');
+          if (/^demo:(as:|reset)/.test(button.payload)) openApp(button.payload === 'demo:as:university' ? 'uni' : 'hb');
         });
         return;
       }
@@ -328,7 +337,7 @@ function Host() {
       <header className="top">
         <div className="top__brand">
           <span className="top__name">Курсор</span>
-          <span className="top__sub">Конструктор справочников для факультетов · демо в браузере · роль меняется в чате · данные модельные</span>
+          <span className="top__sub">Общая база университета и справочники факультетов · демо в браузере · роль меняется в чате · данные модельные</span>
         </div>
         <button type="button" className="btn btn--quiet" disabled={!ready} onClick={() => void start(true)}>
           Начать заново
@@ -358,6 +367,9 @@ function Host() {
               </button>
               <button type="button" className="phone__reload" disabled={!ready} onClick={() => openApp('hbe')} title="Открыть редактор справочника">
                 Редактор
+              </button>
+              <button type="button" className="phone__reload" disabled={!ready} onClick={() => openApp('uni')} title="Открыть кабинет университета (роль «Университет»)">
+                Вуз
               </button>
             </div>
             <div className="phone__screen">

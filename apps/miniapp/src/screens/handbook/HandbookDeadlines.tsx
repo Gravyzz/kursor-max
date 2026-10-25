@@ -52,6 +52,10 @@ export function HandbookDeadlines() {
         <span className="stack hb-reader-grow"><strong>{item.title}</strong><span className={`small hb-when hb-when--${tone}`}>{dateOnly(date)} · {when.text}</span><small className="muted">{item.pageTitle}</small></span><Icon name="chevron" />
       </button>;
     })}</div> : <EmptyState icon="calendar" title="Ближайших сроков нет">Когда появятся новые даты для вашего курса, они будут здесь.</EmptyState>}
+    {hb.editorRole ? <section className="card hb-block" role="note"><div className="row"><Icon name="calendar" /><strong>Сроки добавляет команда</strong></div>
+      <p className="small muted">Срок — блок «Срок» на странице справочника. Студенты видят его здесь и на главной, бот напоминает в чате.</p>
+      <Button variant="primary" size="medium" onClick={() => hb.nav.push({ name: 'hb-editor-deadlines' })}>Добавить срок</Button>
+    </section> : null}
     <section className="card hb-block"><div className="row"><Icon name="bell" /><strong>{data.profile.reminders ? 'Напоминания включены' : 'Напоминания выключены'}</strong></div><p className="small muted">{data.profile.reminders ? 'Бот напомнит в чате о сроках, для которых редакторы настроили напоминания.' : 'Включите напоминания в профиле, чтобы получать их в чате с ботом.'}</p><Button variant="secondary" size="medium" onClick={() => hb.nav.tab({ name: 'hb-profile' })}>Настроить напоминания</Button></section>
   </>;
 }

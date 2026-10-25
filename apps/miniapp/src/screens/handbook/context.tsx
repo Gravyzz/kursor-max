@@ -20,8 +20,15 @@ export type HandbookRoute =
   | { name: 'hb-profile' }
   | { name: 'hb-ask'; q?: string }
   | { name: 'hb-editor' }
-  | { name: 'hb-editor-page'; id: string }
+  /** addBlock — сразу добавить пустой блок: «Новый срок» открывает страницу с блоком «Срок». */
+  | { name: 'hb-editor-page'; id: string; addBlock?: 'deadline' }
+  /** Сроки для студентов глазами команды: что видят студенты и что ещё в черновиках. */
+  | { name: 'hb-editor-deadlines' }
+  /** Общая страница университета в редакции факультета: уточнение или своя версия. */
+  | { name: 'hb-shared-page'; id: string }
   | { name: 'hb-analytics' }
+  /** Вопросы студентов дежурному: вкладка команды в нижнем меню. */
+  | { name: 'hb-questions' }
   | { name: 'hb-team' }
   | { name: 'hb-create' }
   | { name: 'hb-handbooks' }
@@ -55,6 +62,10 @@ export interface HandbookContextValue {
   openHandbook: (handbookId: string, start?: string) => void;
   /** Перечитать /api/me: после создания справочника, привязки или сброса демо. */
   refresh: () => Promise<void>;
+  /** Открыть кабинет университета (есть у администратора университета). */
+  openUniversity?: () => void;
+  /** Справочник открыт как общая база в кабинете университета: только редакция, без читательских экранов. */
+  editorOnly: boolean;
 }
 
 const Ctx = createContext<HandbookContextValue | null>(null);
@@ -73,6 +84,8 @@ export function HandbookProvider({
   openHandbook,
   refresh,
   initialRoutes,
+  openUniversity,
+  editorOnly = false,
   children,
 }: {
   handbookId: string;
@@ -82,6 +95,8 @@ export function HandbookProvider({
   openHandbook: (handbookId: string, start?: string) => void;
   refresh: () => Promise<void>;
   initialRoutes?: HandbookRoute[];
+  openUniversity?: () => void;
+  editorOnly?: boolean;
   children: ReactNode;
 }) {
   const [stack, setStack] = useState<HandbookRoute[]>(() => initialRoutes?.[0]?.name === 'hb-editor' ? initialRoutes : [{ name: 'hb-home' }, ...(initialRoutes ?? [])]);
@@ -127,7 +142,7 @@ export function HandbookProvider({
     restoreTo.current = 0;
     setStack([route]);
   }, []);
-  const reset = useCallback(() => tab({ name: 'hb-home' }), [tab]);
+  const reset = useCallback(() => tab(editorOnly ? { name: 'hb-editor' } : { name: 'hb-home' }), [tab, editorOnly]);
 
   // Системная кнопка «Назад» клиента MAX: сначала закрывает открытый лист, потом уводит с экрана
   const sheets = useSyncExternalStore(subscribeSheets, sheetCount, sheetCount);
@@ -149,14 +164,31 @@ export function HandbookProvider({
     [handbookId],
   );
   // Права справочника приходят с сервера: роль в вузе сама по себе не даёт доступ к редактору.
-  const access = useLoad((signal) => api<HandbookHome>(url('/api/handbook'), { signal }), [handbookId], `home:${handbookId}`);
+  // Общая база в кабинете университета — не справочник для чтения: роль берём из редакции
+  const access = useLoad(
+    (signal) => editorOnly
+      ? api<{ role: 'admin' | 'editor' }>(url('/api/handbook-editor/structure'), { signal }).then((data) => ({ editorRole: data.role }) as HandbookHome)
+      : api<HandbookHome>(url('/api/handbook'), { signal }),
+    [handbookId, editorOnly],
+    `${editorOnly ? 'base' : 'home'}:${handbookId}`,
+  );
   const editorRole = access.data?.editorRole ?? null;
+  // Команда справочника открывает приложение в «Редакции»: читательские экраны у неё — это предпросмотр.
+  // Ссылка на конкретную страницу (hbp_) или экран редактора ведёт туда, куда ведёт
+  const landed = useRef(false);
+  useEffect(() => {
+    if (landed.current || editorOnly || !access.data) return;
+    landed.current = true;
+    if (access.data.editorRole && !initialRoutes?.length) {
+      setStack((current) => (current.length === 1 && current[0]!.name === 'hb-home' ? [{ name: 'hb-editor' }] : current));
+    }
+  }, [access.data, editorOnly, initialRoutes]);
   const routeName = stack[stack.length - 1]!.name;
   const previousRoute = useRef(routeName);
   useEffect(() => {
-    if (routeName === 'hb-home' && previousRoute.current !== 'hb-home') access.reload();
+    if (!editorOnly && routeName === 'hb-home' && previousRoute.current !== 'hb-home') access.reload();
     previousRoute.current = routeName;
-  }, [routeName, access.reload]);
+  }, [routeName, access.reload, editorOnly]);
   const refreshAccess = useCallback(async () => {
     await refresh();
     access.reload();
@@ -167,8 +199,8 @@ export function HandbookProvider({
     [stack, push, pop, replace, reset, tab],
   );
   const value = useMemo<HandbookContextValue>(
-    () => ({ handbookId, nav, toast, url, person, user, editorRole, home: access, openHandbook, refresh: refreshAccess }),
-    [handbookId, nav, toast, url, person, user, editorRole, access, openHandbook, refreshAccess],
+    () => ({ handbookId, nav, toast, url, person, user, editorRole, home: access, openHandbook, refresh: refreshAccess, openUniversity, editorOnly }),
+    [handbookId, nav, toast, url, person, user, editorRole, access, openHandbook, refreshAccess, openUniversity, editorOnly],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

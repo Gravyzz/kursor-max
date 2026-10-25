@@ -7,6 +7,8 @@ import { stripNul } from '../../../server/src/lib/sanitize';
 import { registerCommonRoutes } from '../../../server/src/api/routes/common';
 import { registerHandbookRoutes } from '../../../server/src/api/routes/handbook';
 import { registerHandbookEditorRoutes } from '../../../server/src/api/routes/handbook-editor';
+import { registerUniversityRoutes } from '../../../server/src/api/routes/university';
+import { registerPlatformRoutes } from '../../../server/src/api/routes/platform';
 import { authenticate, type Actor } from './auth';
 import { serial } from './pool';
 
@@ -45,18 +47,24 @@ function add(method: string, path: string, handler: Handler) {
 }
 
 // Минимум интерфейса Fastify, которым пользуются модули маршрутов
+// Маршрут может прийти и с настройками Fastify (app.post(path, { bodyLimit }, handler)) — настройки здесь не нужны
+type Route3 = (path: string, optionsOrHandler: Handler | object, handler?: Handler) => void;
+const route = (method: string): Route3 => (path, optionsOrHandler, handler) =>
+  add(method, path, (typeof optionsOrHandler === 'function' ? optionsOrHandler : handler) as Handler);
 const app = {
-  get: (path: string, handler: Handler) => add('GET', path, handler),
-  post: (path: string, handler: Handler) => add('POST', path, handler),
-  patch: (path: string, handler: Handler) => add('PATCH', path, handler),
-  put: (path: string, handler: Handler) => add('PUT', path, handler),
-  delete: (path: string, handler: Handler) => add('DELETE', path, handler),
+  get: route('GET'),
+  post: route('POST'),
+  patch: route('PATCH'),
+  put: route('PUT'),
+  delete: route('DELETE'),
 };
 
 const fastifyLike = app as never;
 registerCommonRoutes(fastifyLike);
 registerHandbookRoutes(fastifyLike);
 registerHandbookEditorRoutes(fastifyLike);
+registerUniversityRoutes(fastifyLike);
+registerPlatformRoutes(fastifyLike);
 
 export interface ApiResponse {
   status: number;

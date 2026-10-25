@@ -179,6 +179,8 @@ export interface SeedOptions {
   /** true — создавать страницы-заготовки; false — только разделы. */
   withDrafts?: boolean;
   ownerPersonId?: string | null;
+  /** Страницы «раздел/адрес», которые уже есть в общей базе: заготовки для них не создаются. */
+  skip?: Set<string>;
 }
 
 /** Все подсказки шаблона: страница-заготовка, где подсказка так и осталась текстом, не публикуется (APP-19). */
@@ -196,10 +198,11 @@ export function isTemplateHint(text: unknown, pageNote?: string | null): boolean
 }
 
 /** Разворачивает стартовый скелет в пустом справочнике. Существующие разделы не трогает. */
-export async function seedTemplate(db: Db, handbookId: string, options: SeedOptions = {}): Promise<{ sections: number; pages: number }> {
+export async function seedTemplate(db: Db, handbookId: string, options: SeedOptions = {}): Promise<{ sections: number; pages: number; skipped: number }> {
   const existing = new Set((await many<{ slug: string }>(db, 'SELECT slug FROM sections WHERE handbook_id = $1', [handbookId])).map((r) => r.slug));
   let sections = 0;
   let pages = 0;
+  let skipped = 0;
   for (const section of HANDBOOK_TEMPLATE) {
     if (existing.has(section.slug)) continue;
     const row = await one<{ id: string }>(
@@ -211,6 +214,10 @@ export async function seedTemplate(db: Db, handbookId: string, options: SeedOpti
     if (options.withDrafts === false) continue;
     let position = 10;
     for (const page of section.pages) {
+      if (options.skip?.has(`${section.slug}/${page.slug}`)) {
+        skipped += 1;
+        continue;
+      }
       const blocks = page.blocks ?? [t('hint', page.hint)];
       await db.query(
         `INSERT INTO pages(handbook_id, section_id, slug, title, summary, position, status, blocks, draft_title, draft_summary, draft_blocks, draft_note, owner_person_id, search_text, search_title)
@@ -234,5 +241,5 @@ export async function seedTemplate(db: Db, handbookId: string, options: SeedOpti
       position += 10;
     }
   }
-  return { sections, pages };
+  return { sections, pages, skipped };
 }

@@ -280,17 +280,33 @@ function Deadline({
   );
 }
 
+/** Адрес загруженного файла. В браузерном демо фрейм без своего адреса — витрина узнаёт файл по пути /api/files/. */
+export function fileHref(id: string, name?: string): string {
+  const origin = /^https?:/.test(window.location.origin) ? window.location.origin : 'https://demo.invalid';
+  return `${origin}/api/files/${id}${name ? `/${encodeURIComponent(name)}` : ''}`;
+}
+
+/** «PDF · 240 КБ» под названием файла: студент понимает, что откроет, ещё до нажатия. */
+function fileMeta(block: Extract<Block, { type: 'file' }>): string {
+  const ext = /\.([a-z0-9]{1,5})$/i.exec(block.fileName ?? '')?.[1]?.toUpperCase();
+  const size = !block.fileSize ? '' : block.fileSize < 1024 * 1024 ? `${Math.max(1, Math.round(block.fileSize / 1024))} КБ` : `${(block.fileSize / 1024 / 1024).toFixed(1).replace('.', ',')} МБ`;
+  return [ext, size].filter(Boolean).join(' · ');
+}
+
 function LinkLike({ block }: { block: Extract<Block, { type: 'link' | 'file' | 'chat' }> }) {
   const icon = block.type === 'file' ? 'file' : block.type === 'chat' ? 'chat' : 'link';
   const action = block.type === 'file' ? 'Открыть файл' : block.type === 'chat' ? 'Войти в чат' : 'Перейти';
+  const href = block.type === 'file' && block.fileId ? fileHref(block.fileId, block.fileName) : block.url ?? '';
+  const meta = block.type === 'file' && block.fileId ? fileMeta(block) : '';
   return (
-    <button type="button" className="card hb-block hb-link" onClick={() => bridge.openLink(block.url)}>
+    <button type="button" className="card hb-block hb-link" onClick={() => bridge.openLink(href)}>
       <span className="hb-block__icon" aria-hidden="true">
         <Icon name={icon} />
       </span>
       <span className="stack" style={{ gap: 2, textAlign: 'left', flex: 1 }}>
         <span style={{ fontWeight: 600 }}>{block.title}</span>
         {block.note ? <span className="small muted">{block.note}</span> : null}
+        {meta ? <span className="small faint">{meta}</span> : null}
       </span>
       <span className="hb-link__action small">{action} ›</span>
     </button>
@@ -335,13 +351,13 @@ export interface BlocksProps {
   reminders?: boolean | null;
   /** Открыть «О себе», чтобы включить напоминания. */
   onOpenProfile?: () => void;
+  /** Подпись уточнения факультета к общей странице: «ИИТ». */
+  localLabel?: string | null;
 }
 
-export function Blocks({ blocks, today, done, onToggle, headingLevel = 2, reminders, onOpenProfile }: BlocksProps) {
+export function Blocks({ blocks, today, done, onToggle, headingLevel = 2, reminders, onOpenProfile, localLabel }: BlocksProps) {
   const level = headingLevel;
-  return (
-    <div className="stack--lg hb-reader-blocks">
-      {blocks.map((block) => {
+  const render = (block: Block) => {
         switch (block.type) {
           case 'text':
             return <TextBlock key={block.id} text={block.text} />;
@@ -368,7 +384,23 @@ export function Blocks({ blocks, today, done, onToggle, headingLevel = 2, remind
           default:
             return null;
         }
-      })}
+  };
+  // Уточнение факультета к общей странице: блоки подряд — одна плашка «В ИИТ», без разделения страницы на части
+  const groups: Array<{ local: boolean; blocks: Block[] }> = [];
+  for (const block of blocks) {
+    const local = (block as Block & { origin?: string }).origin === 'local';
+    const last = groups[groups.length - 1];
+    if (last && last.local === local) last.blocks.push(block);
+    else groups.push({ local, blocks: [block] });
+  }
+  return (
+    <div className="stack--lg hb-reader-blocks">
+      {groups.map((group) => group.local ? (
+        <div key={`local-${group.blocks[0]!.id}`} className="hb-local" role="group" aria-label={localLabel ? `Уточнение: ${localLabel}` : 'Уточнение факультета'}>
+          <span className="hb-local__who">{localLabel ? `В ${localLabel}` : 'На факультете'}</span>
+          {group.blocks.map(render)}
+        </div>
+      ) : group.blocks.map(render))}
     </div>
   );
 }

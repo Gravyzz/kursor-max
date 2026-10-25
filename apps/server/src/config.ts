@@ -56,6 +56,12 @@ const schema = z.object({
     }, 'APP_TIMEZONE: укажите часовой пояс вида Europe/Moscow или Asia/Tomsk')
     .default('Europe/Moscow'),
   DEMO_ENABLED: boolFromEnv.default('true'),
+  // Команда Курсора: id пользователей MAX через запятую. Открывают кабинет платформы — подключают вузы.
+  // На офлайн-стенде с DEV_AUTH по умолчанию это тестовый пользователь 100500 из имитации чата.
+  PLATFORM_ADMIN_IDS: z
+    .string()
+    .refine((value) => value.split(/[\s,]+/).filter(Boolean).every((id) => /^\d{1,19}$/.test(id)), 'PLATFORM_ADMIN_IDS: id пользователей MAX через запятую')
+    .default(''),
   NOTIFY_RPS: z.coerce.number().positive().max(30).default(20),
   WORKER_TICK_MS: z.coerce.number().int().positive().default(3000),
 });
@@ -71,6 +77,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     throw new Error(`Некорректные переменные окружения: ${details}`);
   }
   const config = parsed.data;
+  if (config.DEV_AUTH && !config.PLATFORM_ADMIN_IDS) config.PLATFORM_ADMIN_IDS = '100500';
   if (config.DEV_AUTH && config.NODE_ENV === 'production') {
     throw new Error('DEV_AUTH нельзя включать при NODE_ENV=production');
   }

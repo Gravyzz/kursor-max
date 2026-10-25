@@ -141,7 +141,18 @@ function makeBlockSchema(strict: boolean) {
       remindDays: z.array(z.number().int().min(0).max(30)).max(4).optional(),
     }),
     z.object({ ...base, type: z.literal('link'), title: required('Название', 'Заполните название', 200), url: httpsLink(), note: optional('Пояснение', 300) }),
-    z.object({ ...base, type: z.literal('file'), title: required('Название', 'Заполните название', 200), url: httpsLink(), note: optional('Пояснение', 300) }),
+    // Файл загружают в приложение (fileId); старые блоки со ссылкой (url) продолжают работать.
+    // «Нужен файл или ссылка» проверяет blocksSchema: внутри discriminatedUnion условие между полями не поставить
+    z.object({
+      ...base,
+      type: z.literal('file'),
+      title: required('Название', 'Заполните название', 200),
+      fileId: blankAsMissing(z.string().uuid('Файл не найден — загрузите его заново').optional()),
+      fileName: optional('Имя файла', 200),
+      fileSize: z.number().int().min(0).max(10 * 1024 * 1024).optional(),
+      url: blankAsMissing(strict ? z.string().trim().max(1024, 'Слишком длинная ссылка').refine(isHttpsUrl, 'Ссылка должна начинаться с https://').optional() : z.string().max(1024, 'Слишком длинная ссылка').optional()),
+      note: optional('Пояснение', 300),
+    }),
     z.object({
       ...base,
       type: z.literal('alert'),
@@ -178,6 +189,9 @@ export const blocksSchema = z
     const blockIds = new Map<string, number>();
     const progressIds = new Set<string>();
     blocks.forEach((block, index) => {
+      if (block.type === 'file' && !block.fileId && !block.url) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: [index, 'fileId'], message: 'Загрузите файл' });
+      }
       if (block.type === 'deadline' && block.endsOn && block.endsOn < block.startsOn) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: [index, 'endsOn'], message: 'Дата окончания раньше даты начала' });
       }

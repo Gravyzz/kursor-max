@@ -25,6 +25,8 @@ interface Page {
   notHelpful?: number;
   /** Для аналитики: страницу давно не проверяли. */
   staleDays?: number;
+  /** Подразделение, которое отвечает за страницу общей базы. */
+  ownerUnit?: string;
 }
 
 interface Section {
@@ -38,6 +40,39 @@ interface Section {
 }
 
 const text = (id: string, value: string): Block => ({ id, type: 'text', text: value });
+
+const AKADEM_SLUG = 'akademicheskiy-otpusk';
+
+/** Академический отпуск в версии 1: с неё экономический факультет сделал свою версию. */
+const AKADEM_V1: Block[] = [
+  text('a1', 'Академический отпуск дают до двух лет: по болезни, по семейным обстоятельствам или в связи с призывом. Место и форма обучения сохраняются.'),
+  {
+    id: 'a2',
+    type: 'steps',
+    title: 'Как оформить',
+    items: [
+      { id: 'p1', text: 'Написать заявление на имя ректора' },
+      { id: 'p2', text: 'Принести медицинское заключение в учебный офис', hint: 'Если отпуск по болезни' },
+      { id: 'p3', text: 'Дождаться приказа — обычно 5 рабочих дней' },
+    ],
+  },
+];
+
+/** Версия 2 (14 октября): заключение загружают в личный кабинет, бумагу больше не принимают. */
+const AKADEM_V2: Block[] = [
+  AKADEM_V1[0]!,
+  {
+    id: 'a2',
+    type: 'steps',
+    title: 'Как оформить',
+    items: [
+      { id: 'p1', text: 'Написать заявление на имя ректора' },
+      { id: 'p2', text: 'Загрузить медицинское заключение в личный кабинет', hint: 'Если отпуск по болезни' },
+      { id: 'p3', text: 'Дождаться приказа — обычно 5 рабочих дней' },
+    ],
+  },
+  { id: 'a3', type: 'alert', tone: 'warn', text: 'С 2026/27 учебного года заключения на бумаге не принимают.' },
+];
 
 // ─── Общеуниверситетский справочник: то, что одинаково для всех факультетов ───
 
@@ -53,6 +88,8 @@ const UNIVERSITY: Section[] = [
         slug: 'spravka-ob-obuchenii',
         title: 'Справка об обучении',
         summary: 'Общий порядок по университету',
+        ownerUnit: 'Учебно-методическое управление',
+        staleDays: 16,
         views: 180,
         helpful: 22,
         notHelpful: 6,
@@ -68,13 +105,15 @@ const UNIVERSITY: Section[] = [
               { id: 'p3', text: 'Забрать справку с паспортом или студенческим' },
             ],
           },
-          { id: 'u3', type: 'alert', tone: 'info', text: 'В институтах порядок может отличаться — смотрите страницу своего факультета.' },
+          { id: 'u3', type: 'alert', tone: 'info', text: 'Для банка и визы просите справку с указанием периода обучения — обычной формы им обычно не хватает.' },
         ],
       },
       {
         slug: 'spravka-v-voenkomat',
         title: 'Справка в военкомат',
         summary: 'Форма 4: где взять и в какие сроки подать',
+        ownerUnit: 'Отдел воинского учёта',
+        staleDays: 178,
         views: 96,
         helpful: 14,
         notHelpful: 1,
@@ -92,6 +131,17 @@ const UNIVERSITY: Section[] = [
           { id: 'v3', type: 'checklist', title: 'Что взять с собой', items: [{ id: 'c1', text: 'Паспорт' }, { id: 'c2', text: 'Приписное свидетельство или военный билет' }, { id: 'c3', text: 'Студенческий билет' }] },
         ],
       },
+      {
+        slug: AKADEM_SLUG,
+        title: 'Академический отпуск',
+        summary: 'По болезни, семейным обстоятельствам, призыву',
+        ownerUnit: 'Учебно-методическое управление',
+        staleDays: 4,
+        views: 74,
+        helpful: 9,
+        notHelpful: 1,
+        blocks: AKADEM_V2,
+      },
     ],
   },
   {
@@ -105,6 +155,8 @@ const UNIVERSITY: Section[] = [
         slug: 'materialnaya-pomoshch',
         title: 'Материальная помощь',
         summary: 'Разовая выплата в трудной ситуации',
+        ownerUnit: 'Профком студентов',
+        staleDays: 185,
         views: 210,
         helpful: 31,
         notHelpful: 3,
@@ -127,6 +179,7 @@ const UNIVERSITY: Section[] = [
         slug: 'lgoty-i-proezd',
         title: 'Льготы и проезд',
         summary: 'Транспортная карта, музеи, скидки',
+        ownerUnit: 'Управление по работе со студентами',
         views: 140,
         helpful: 19,
         notHelpful: 2,
@@ -343,30 +396,6 @@ const FACULTY: Section[] = [
     summary: 'Справки, зачётка, потерянные документы',
     position: 30,
     pages: [
-      {
-        slug: 'spravka-ob-obuchenii',
-        title: 'Справка об обучении',
-        summary: 'В ИИТ — через чат учебного офиса, без личного визита за заявкой',
-        overrides: 'spravka-ob-obuchenii',
-        views: 340,
-        helpful: 58,
-        notHelpful: 2,
-        blocks: [
-          text('s0', 'В нашем институте заявку принимают в чате учебного офиса — приходить дважды не нужно.'),
-          {
-            id: 's1',
-            type: 'steps',
-            title: 'Как получить',
-            items: [
-              { id: 'p1', text: 'Написать в чат учебного офиса: ФИО, группа, куда нужна справка' },
-              { id: 'p2', text: 'Дождаться ответа «готова»', hint: 'Обычно на следующий рабочий день' },
-              { id: 'p3', text: 'Забрать в каб. 121 со студенческим билетом' },
-            ],
-          },
-          { id: 's2', type: 'chat', title: 'Учебный офис ИИТ', url: 'https://max.ru/join/iit-office-demo', note: 'Отвечают в рабочие дни до 17:00' },
-          { id: 's3', type: 'alert', tone: 'info', text: 'Для банка и визы просите «справку с указанием периода обучения» — обычной формы им обычно не хватает.' },
-        ],
-      },
       {
         slug: 'vosstanovlenie-dokumentov',
         title: 'Потерял студенческий или зачётку',
@@ -617,7 +646,7 @@ export function shiftDemoBlocks(blocks: Block[], days: number): Block[] {
   });
 }
 
-async function insertSections(client: pg.PoolClient, handbookId: string, sections: Section[], ownerPersonId: string | null) {
+async function insertSections(client: pg.PoolClient, handbookId: string, sections: Section[], ownerPersonId: string | null, owners: Record<string, string> = {}) {
   const pageIds = new Map<string, string>();
   const days = demoDateShift();
   for (const section of sections) {
@@ -633,19 +662,28 @@ async function insertSections(client: pg.PoolClient, handbookId: string, section
       const row = await one<{ id: string }>(
         client,
         `INSERT INTO pages(handbook_id, section_id, slug, title, summary, audience, position, status, blocks,
-                           owner_person_id, views, helpful, not_helpful, search_text, search_title, published_at, checked_at, review_at)
+                           owner_person_id, views, helpful, not_helpful, search_text, search_title, published_at, checked_at, review_at,
+                           owner_unit, version_no)
          VALUES ($1, $2, $3, $4, $5, COALESCE($6::jsonb, '{}'::jsonb), $7, 'published', $8, $9, $10, $11, $12, $13, $15,
-                 now() - make_interval(days => $14), now() - make_interval(days => $14), (now() + make_interval(days => 180 - $14))::date)
+                 now() - make_interval(days => $14), now() - make_interval(days => $14), (now() + make_interval(days => 180 - $14))::date,
+                 $16, 1)
          RETURNING id`,
         [
           handbookId, sectionRow!.id, page.slug, page.title, page.summary,
           page.audience ? JSON.stringify(page.audience) : null, position,
-          JSON.stringify(page.blocks), ownerPersonId,
+          JSON.stringify(page.blocks), (page.ownerUnit && owners[page.ownerUnit]) || ownerPersonId,
           page.views ?? 0, page.helpful ?? 0, page.notHelpful ?? 0,
           pageSearchText(page.summary, page.blocks),
           page.staleDays ?? 20,
           pageSearchTitle(page.title, section.title),
+          page.ownerUnit ?? null,
         ],
+      );
+      // Версия 1 в истории: с ней сверяются свои версии факультетов
+      await client.query(
+        `INSERT INTO page_versions(page_id, title, summary, blocks, author_person_id, version_no, created_at)
+         VALUES ($1, $2, $3, $4, $5, 1, now() - make_interval(days => $6))`,
+        [row!.id, page.title, page.summary, JSON.stringify(page.blocks), (page.ownerUnit && owners[page.ownerUnit]) || ownerPersonId, page.staleDays ?? 20],
       );
       pageIds.set(page.slug, row!.id);
       await syncDeadlines(client, handbookId, row!.id, page.blocks);
@@ -663,7 +701,7 @@ export interface DemoHandbookResult {
 
 export async function createDemoHandbook(
   client: pg.PoolClient,
-  input: { universityId: string; instituteId: string; editorPersonId: string; deanPersonId: string; readerPersonIds: string[] },
+  input: { universityId: string; instituteId: string; editorPersonId: string; deanPersonId: string; readerPersonIds: string[]; economicsModelUsers?: number[]; adminModelUsers?: number[] },
 ): Promise<DemoHandbookResult> {
   // У каждой песочницы свои слаги: диплинк hb_<слаг> должен вести ровно в один справочник
   const suffix = input.universityId.replace(/-/g, '').slice(0, 8);
@@ -672,11 +710,36 @@ export async function createDemoHandbook(
     instituteId: null,
     parentId: null,
     slug: `mu-demo-${suffix}`,
-    title: 'Модельный университет',
-    subtitle: 'Общее для всех институтов',
+    title: 'Общая база',
+    subtitle: 'Единые инструкции · Модельный университет',
     emoji: '🏛',
   });
-  await insertSections(client, universityHandbookId, UNIVERSITY, input.deanPersonId);
+  // Ответственные за общие страницы — сотрудники подразделений университета (модельные, без аккаунтов MAX)
+  const staff = async (fullName: string) =>
+    (await one<{ id: string }>(
+      client,
+      "INSERT INTO persons(university_id, institute_id, role, full_name) VALUES ($1, NULL, 'staff', $2) RETURNING id",
+      [input.universityId, fullName],
+    ))!.id;
+  const orlova = await staff('Орлова Марина Викторовна');
+  const kim = await staff('Ким Алексей Сергеевич');
+  const owners: Record<string, string> = {
+    'Учебно-методическое управление': orlova,
+    'Отдел воинского учёта': await staff('Лебедев Павел Андреевич'),
+    'Профком студентов': await staff('Сафина Алия Рустемовна'),
+    'Управление по работе со студентами': kim,
+  };
+  const basePages = await insertSections(client, universityHandbookId, UNIVERSITY, input.deanPersonId, owners);
+  await client.query("UPDATE pages SET backup_owner_person_id = $2 WHERE handbook_id = $1 AND owner_unit = 'Учебно-методическое управление'", [universityHandbookId, kim]);
+  // «Академический отпуск» обновили 14 октября: версия 1 — прежний порядок, версия 2 — личный кабинет
+  const akadem = basePages.get(AKADEM_SLUG)!;
+  await client.query("UPDATE page_versions SET blocks = $2, note = NULL WHERE page_id = $1 AND version_no = 1", [akadem, JSON.stringify(shiftDemoBlocks(AKADEM_V1, demoDateShift()))]);
+  await client.query(
+    `INSERT INTO page_versions(page_id, title, summary, blocks, author_person_id, note, version_no, created_at)
+     VALUES ($1, 'Академический отпуск', 'По болезни, семейным обстоятельствам, призыву', $2, $3, 'Справку из поликлиники теперь загружают в личный кабинет', 2, now() - interval '4 days')`,
+    [akadem, JSON.stringify(AKADEM_V2), orlova],
+  );
+  await client.query("UPDATE pages SET version_no = 2, published_at = now() - interval '4 days' WHERE id = $1", [akadem]);
 
   const handbookId = await insertHandbook(client, {
     universityId: input.universityId,
@@ -691,23 +754,28 @@ export async function createDemoHandbook(
       synonyms: { каб: 'кабинет', лаба: 'лабораторная работа', лабы: 'лабораторная работа', вышка: 'высшая математика' },
     },
   });
-  const pages = await insertSections(client, handbookId, FACULTY, input.editorPersonId);
+  const facultyPages = await insertSections(client, handbookId, FACULTY, input.editorPersonId);
+  // Страницы, которые студент ИИТ видит: свои и общие (для журнала поиска и объявлений)
+  const pages = new Map([...basePages, ...facultyPages]);
 
-  // Переопределение страницы вуза: та же тема, но порядок в институте свой
-  const override = pages.get('spravka-ob-obuchenii');
-  const parentPage = await one<{ id: string }>(
-    client,
-    "SELECT id FROM pages WHERE handbook_id = $1 AND slug = 'spravka-ob-obuchenii'",
-    [universityHandbookId],
-  );
-  if (override && parentPage) {
-    await client.query('UPDATE pages SET inherited_from = $2 WHERE id = $1', [override, parentPage.id]);
-  }
+  // Уточнение ИИТ к общей «Справке об обучении»: общая часть не копируется, кабинет выдачи — свой
+  await insertSupplement(client, handbookId, basePages.get('spravka-ob-obuchenii')!, 'u2', input.deanPersonId, [
+    { id: 's1', type: 'place', title: 'Где забрать справку в ИИТ', address: 'Корпус 2, каб. 214', howTo: 'Пн–пт 10:00–17:00. Готовность — по сообщению в чате учебного офиса.' },
+  ]);
 
   await client.query(
     "INSERT INTO handbook_members(handbook_id, person_id, role) VALUES ($1, $2, 'admin'), ($1, $3, 'editor') ON CONFLICT DO NOTHING",
     [handbookId, input.deanPersonId, input.editorPersonId],
   );
+  // Постоянный администратор ИИТ: в роли «Университет» посетитель смотрит справочник факультета со стороны,
+  // а сообщения «общая страница обновилась» получает деканат ИИТ
+  const iitAdmin = (await one<{ id: string }>(
+    client,
+    "INSERT INTO persons(university_id, institute_id, role, full_name, user_id) VALUES ($1, $2, 'dean', 'Сидоров Павел Андреевич', $3) RETURNING id",
+    [input.universityId, input.instituteId, input.adminModelUsers?.[0] ?? null],
+  ))!.id;
+  await client.query("INSERT INTO org_roles(person_id, university_id, institute_id, role) VALUES ($1, $2, $3, 'faculty_admin')", [iitAdmin, input.universityId, input.instituteId]);
+  await client.query("INSERT INTO handbook_members(handbook_id, person_id, role) VALUES ($1, $2, 'admin')", [handbookId, iitAdmin]);
 
   // Страница на проверке: видно, как работает цикл «черновик → ревью → публикация»
   const reviewSection = await one<{ id: string }>(client, "SELECT id FROM sections WHERE handbook_id = $1 AND slug = 'ucheba'", [handbookId]);
@@ -838,5 +906,171 @@ export async function createDemoHandbook(
     );
   }
 
+  await createEconomicsFaculty(client, {
+    universityId: input.universityId,
+    suffix,
+    baseHandbookId: universityHandbookId,
+    basePages,
+    modelUsers: input.economicsModelUsers ?? [],
+    adminUser: input.adminModelUsers?.[1] ?? null,
+  });
+
   return { handbookId, slug: `iit-demo-${suffix}`, universityHandbookId };
+}
+
+/** Уточнение факультета к общей странице, сразу опубликованное. */
+async function insertSupplement(client: pg.PoolClient, handbookId: string, basePageId: string, anchor: string | null, ownerPersonId: string, blocks: Block[]) {
+  await client.query(
+    `INSERT INTO page_supplements(handbook_id, base_page_id, anchor_block_id, blocks, status, owner_person_id, search_text, published_at, checked_at, updated_at)
+     VALUES ($1, $2, $3, $4, 'published', $5, $6, now() - interval '1 day', now() - interval '1 day', now() - interval '1 day')`,
+    [handbookId, basePageId, anchor, JSON.stringify(blocks), ownerPersonId, pageSearchText(null, blocks)],
+  );
+}
+
+// ─── Второй факультет: экономический. Общие процедуры те же, отличия — уточнением и своей версией ───
+
+const ECONOMICS: Section[] = [
+  {
+    slug: 'ucheba',
+    title: 'Учёба',
+    emoji: '🎓',
+    summary: 'Сессия, пересдачи, кафедры',
+    position: 20,
+    pages: [
+      {
+        slug: 'peresdachi',
+        title: 'Пересдачи и комиссии',
+        summary: 'Как записаться на пересдачу в ЭФ',
+        views: 64,
+        helpful: 8,
+        notHelpful: 1,
+        blocks: [
+          text('e1', 'На экономическом факультете пересдачи проходят по графику кафедр, вторая пересдача — только комиссией.'),
+          {
+            id: 'e2',
+            type: 'steps',
+            title: 'Как записаться',
+            items: [
+              { id: 'p1', text: 'Посмотреть график пересдач на стенде деканата или в чате курса' },
+              { id: 'p2', text: 'Записаться у методиста кафедры не позже чем за два дня' },
+              { id: 'p3', text: 'Прийти со студенческим и зачётной книжкой' },
+            ],
+          },
+        ],
+      },
+      {
+        slug: 'kontakty-dekanata',
+        title: 'Контакты деканата',
+        summary: 'Кабинет 305, часы приёма',
+        views: 51,
+        helpful: 7,
+        notHelpful: 0,
+        blocks: [
+          { id: 'k1', type: 'contact', name: 'Деканат ЭФ', role: 'Справки, заявления, академические вопросы', room: 'Корпус 5, каб. 305', hours: 'Пн–чт 9:30–16:30, пятница — неприёмный день', email: 'ef@example.edu' },
+        ],
+      },
+    ],
+  },
+];
+
+async function createEconomicsFaculty(
+  client: pg.PoolClient,
+  input: { universityId: string; suffix: string; baseHandbookId: string; basePages: Map<string, string>; modelUsers: number[]; adminUser?: number | null },
+) {
+  const institute = (await one<{ id: string }>(
+    client,
+    "INSERT INTO institutes(university_id, name, short_name) VALUES ($1, 'Экономический факультет', 'ЭФ') RETURNING id",
+    [input.universityId],
+  ))!.id;
+  const person = async (role: 'dean' | 'staff', fullName: string) =>
+    (await one<{ id: string }>(
+      client,
+      'INSERT INTO persons(university_id, institute_id, role, full_name) VALUES ($1, $2, $3, $4) RETURNING id',
+      [input.universityId, institute, role, fullName],
+    ))!.id;
+  const belova = await person('dean', 'Белова Нина Игоревна');
+  if (input.adminUser) await client.query('UPDATE persons SET user_id = $2 WHERE id = $1', [belova, input.adminUser]);
+  const gusev = await person('staff', 'Гусев Денис Олегович');
+  await client.query(
+    `INSERT INTO org_roles(person_id, university_id, institute_id, role, created_at)
+     VALUES ($1, $3, $4, 'faculty_admin', now() - interval '14 days'), ($2, $3, $4, 'faculty_admin', now() - interval '3 days')`,
+    [belova, gusev, input.universityId, institute],
+  );
+  // Приглашение второму администратору ещё не открыто — его видно на обзоре университета
+  await client.query(
+    `INSERT INTO invites(code, person_id, created_at, expires_at) VALUES ($1, $2, now() - interval '3 days', now() + interval '27 days')`,
+    [`H-EF${input.suffix.slice(0, 2).toUpperCase()}-${input.suffix.slice(2, 6).toUpperCase()}`, gusev],
+  );
+  const handbookId = await insertHandbook(client, {
+    universityId: input.universityId,
+    instituteId: institute,
+    parentId: input.baseHandbookId,
+    slug: `ef-demo-${input.suffix}`,
+    title: 'Справочник ЭФ',
+    subtitle: 'Экономический факультет',
+    emoji: '📈',
+    settings: { dutyContact: 'Деканат ЭФ, корпус 5, каб. 305' },
+  });
+  await client.query("INSERT INTO handbook_members(handbook_id, person_id, role) VALUES ($1, $2, 'admin')", [handbookId, belova]);
+  const pages = await insertSections(client, handbookId, ECONOMICS, belova);
+  await client.query("UPDATE handbooks SET created_at = now() - interval '14 days' WHERE id = $1", [handbookId]);
+
+  // Своё уточнение к той же общей справке: другой кабинет и часы выдачи
+  await insertSupplement(client, handbookId, input.basePages.get('spravka-ob-obuchenii')!, null, belova, [
+    { id: 's1', type: 'place', title: 'Выдача справок на экономическом', address: 'Корпус 5, деканат, каб. 305', howTo: 'Пн–чт 9:30–16:30, в пятницу выдачи нет.' },
+  ]);
+
+  // Своя версия «Академического отпуска», сделанная 11 сентября из версии 1. Общую с тех пор обновили — версия ЭФ отстала
+  const docs = (await one<{ id: string }>(
+    client,
+    "INSERT INTO sections(handbook_id, slug, title, emoji, summary, position) VALUES ($1, 'spravki-i-dokumenty', 'Справки и документы', '📄', 'Справки и заявления', 30) RETURNING id",
+    [handbookId],
+  ))!.id;
+  const ownBlocks: Block[] = [
+    AKADEM_V1[0]!,
+    {
+      id: 'a2',
+      type: 'steps',
+      title: 'Как оформить на экономическом',
+      items: [
+        { id: 'p1', text: 'Написать заявление на имя ректора и согласовать его с деканом' },
+        { id: 'p2', text: 'Принести медицинское заключение в деканат ЭФ, каб. 305', hint: 'Если отпуск по болезни' },
+        { id: 'p3', text: 'Дождаться приказа — обычно 5 рабочих дней' },
+      ],
+    },
+  ];
+  await client.query(
+    `INSERT INTO pages(handbook_id, section_id, slug, title, summary, position, status, blocks, owner_person_id, inherited_from, base_version,
+                       override_reason, version_no, search_text, search_title, published_at, checked_at, review_at)
+     VALUES ($1, $2, $3, 'Академический отпуск', 'Порядок на экономическом факультете', 30, 'published', $4, $5, $6, 1,
+             'Заявление согласует декан, документы принимает деканат ЭФ', 1, $7, $8,
+             now() - interval '37 days', now() - interval '37 days', (now() + interval '143 days')::date)`,
+    [handbookId, docs, AKADEM_SLUG, JSON.stringify(ownBlocks), belova, input.basePages.get(AKADEM_SLUG), pageSearchText(null, ownBlocks), pageSearchTitle('Академический отпуск', 'Справки и документы')],
+  );
+
+  // Немного жизни: читатели и запросы, чтобы метрики университета не были пустыми
+  const readers: string[] = [];
+  for (const [i, userId] of input.modelUsers.slice(0, 6).entries()) {
+    const row = await one<{ id: string }>(
+      client,
+      `INSERT INTO handbook_readers(handbook_id, user_id, course, last_seen_at) VALUES ($1, $2, 1, now() - make_interval(hours => $3))
+       ON CONFLICT (handbook_id, user_id) DO NOTHING RETURNING id`,
+      [handbookId, userId, i + 2],
+    );
+    if (row) readers.push(row.id);
+  }
+  const queries: Array<[string, number, string | null]> = [
+    ['справка об обучении', 2, input.basePages.get('spravka-ob-obuchenii') ?? null],
+    ['пересдача', 1, pages.get('peresdachi') ?? null],
+    ['академ', 1, null],
+    ['где деканат', 1, pages.get('kontakty-dekanata') ?? null],
+    ['стажировка в банке', 0, null],
+  ];
+  for (const [i, [query, results, opened]] of queries.entries()) {
+    await client.query(
+      `INSERT INTO search_log(handbook_id, reader_id, query, normalized, results, opened_page_id, source, created_at)
+       VALUES ($1, $2, $3, $3, $4, $5, 'app', now() - make_interval(hours => $6))`,
+      [handbookId, readers[i % Math.max(readers.length, 1)] ?? null, query, results, opened, (i + 1) * 7],
+    );
+  }
 }

@@ -4,7 +4,8 @@ import {
   Megaphone, Target, MapPin, Clock3, Link, MessageCircle, FileText, TriangleAlert, Info,
   AlignLeft, List, SquareCheck, Check, LockKeyhole, ArrowUp, ArrowDown, GraduationCap,
   RefreshCw, Plus, House, ArrowLeft, ChevronDown, CalendarDays, Settings, Share2,
-  LogOut, Trash2, Copy, Download, Dumbbell, Wallet, Star, LifeBuoy, ThumbsUp, ThumbsDown, ListChecks, EllipsisVertical, type LucideIcon,
+  LogOut, Trash2, Copy, Download, Dumbbell, Wallet, Star, LifeBuoy, ThumbsUp, ThumbsDown, ListChecks, EllipsisVertical,
+  Landmark, Layers, Building2, GitCompareArrows, History, ShieldCheck, Undo2, GitFork, BadgeCheck, Send, CircleAlert, Eye, type LucideIcon,
 } from 'lucide-react';
 
 /** Единый набор Lucide, как в прототипе. Значки декоративные; подпись задаёт кнопка. */
@@ -20,6 +21,8 @@ const ICONS = {
   settings: Settings, share: Share2, logout: LogOut, trash: Trash2, copy: Copy, download: Download,
   sport: Dumbbell, wallet: Wallet, star: Star, help: LifeBuoy, like: ThumbsUp, dislike: ThumbsDown,
   checklist: ListChecks, more: EllipsisVertical,
+  uni: Landmark, layers: Layers, building: Building2, compare: GitCompareArrows, history: History, shield: ShieldCheck,
+  undo: Undo2, fork: GitFork, badge: BadgeCheck, send: Send, alert: CircleAlert, eye: Eye,
 } satisfies Record<string, LucideIcon>;
 export type IconName = keyof typeof ICONS;
 

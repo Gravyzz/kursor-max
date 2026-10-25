@@ -7,6 +7,8 @@ import { validateContact } from '../../auth/initData.js';
 import { bindByPhone, bindInvite, personsForUser, setActivePerson } from '../../services/identity.js';
 import { createDemoSandbox, getDemoRole, setDemoRole } from '../../services/demo.js';
 import { contextFor, startRef } from '../../services/handbook.js';
+import { universityRole } from '../../services/university.js';
+import { isPlatformAdmin } from '../../services/platform.js';
 
 export function registerCommonRoutes(app: FastifyInstance) {
   const rejectReviewBinding = (viaReviewAuth: boolean) => {
@@ -15,12 +17,13 @@ export function registerCommonRoutes(app: FastifyInstance) {
 
   app.get('/api/me', async (request) => {
     const actor = request.actor!;
-    const [persons, handbook, demoRole] = await Promise.all([
+    const [persons, handbook, demoRole, university] = await Promise.all([
       personsForUser(pool, actor.user.id),
       // Справочник доступен и тем, кого нет в списках деканата, — это отдельный вход в платформу
       // Диплинк на справочник или страницу выбирает справочник, иначе — последний открытый
       contextFor(actor.user, startRef(actor.startParam)).catch(() => null),
       config.DEMO_ENABLED ? getDemoRole(pool, actor.user.id) : Promise.resolve(null),
+      universityRole(pool, actor.user, actor.person?.id ?? null),
     ]);
     return {
       user: { id: actor.user.max_user_id, firstName: actor.user.first_name, lastName: actor.user.last_name, photoUrl: actor.maxPhotoUrl },
@@ -30,6 +33,10 @@ export function registerCommonRoutes(app: FastifyInstance) {
       demoEnabled: config.DEMO_ENABLED,
       /** Роль в демо-песочнице (студент, редактор, деканат) или null, если демо не открывали. */
       demo: demoRole ? { role: demoRole } : null,
+      /** Университет, которым пользователь управляет: открывает кабинет университета. */
+      university: university ? { id: university.universityId, name: university.name, shortName: university.shortName } : null,
+      /** Команда Курсора: открывает кабинет платформы и подключает вузы. */
+      platform: !actor.viaReviewAuth && isPlatformAdmin(actor.user),
       handbook: handbook
         ? { id: handbook.handbook.id, slug: handbook.handbook.slug, title: handbook.handbook.title, emoji: handbook.handbook.emoji }
         : null,
@@ -61,7 +68,7 @@ export function registerCommonRoutes(app: FastifyInstance) {
     return { persons };
   });
 
-  const demoRoleSchema = z.object({ role: z.enum(['student', 'editor', 'dean']).optional() });
+  const demoRoleSchema = z.object({ role: z.enum(['student', 'editor', 'dean', 'university']).optional() });
 
   // Создать или пересоздать демо. Без роли — та же, что была (по умолчанию деканат)
   app.post('/api/demo', async (request) => {

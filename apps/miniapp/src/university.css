@@ -1,0 +1,143 @@
+/* Общая база университета и кабинет университета — поверх glass.css.
+   Цвета — токены: --pd-local только для уточнений факультета, статусные — только для статусов. */
+.pd-app { --pd-local: #5b3fd0; }
+.pd-app[data-theme='dark'] { --pd-local: #c4b4ff; }
+
+/* Поверхности кабинета — стекло с тёмными чернилами, как .card */
+.pd-app :is(.uni-space, .hb-local, .uni-tile) { --pd-text: var(--pd-on-surface); --pd-muted: var(--pd-on-surface-muted); --pd-link: var(--pd-link-surface); color: var(--pd-on-surface); }
+
+/* ─── Кабинет университета ─── */
+.uni-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; }
+.uni-space { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; max-width: 100%; padding: 0 16px 0 6px; border-radius: 999px;
+  background: var(--pd-circle-bg); box-shadow: 0 8px 20px rgba(6, 4, 30, 0.2); font-weight: 600; font-size: var(--pd-font-sm); }
+.uni-space__mark { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: var(--pd-brand-grad); color: #fff; flex: none; }
+.uni-eyebrow { color: var(--pd-muted); font-weight: 500; }
+.uni-start { display: grid; gap: 10px; }
+.uni-steps { margin: 0; padding: 0; list-style: none; counter-reset: uni-step; display: grid; gap: 12px; }
+.uni-steps li { counter-increment: uni-step; display: grid; grid-template-columns: 28px minmax(0, 1fr); column-gap: 10px; row-gap: 2px; align-items: start; }
+.uni-steps li::before { content: counter(uni-step); grid-row: span 2; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--pd-circle-bg); color: var(--pd-link-surface); font-weight: 700; font-size: 13px; }
+.uni-steps li > * { grid-column: 2; }
+.uni-steps li > :first-child { font-weight: 600; font-size: var(--pd-font-sm); }
+.uni-steps .linkbtn { justify-self: start; margin: -6px 0 -8px; padding: 6px 0 8px; min-height: 40px; text-align: left; }
+.uni-steps li > span:first-child { padding-top: 4px; }
+.uni-attention { display: grid; gap: 4px; padding: 16px 0 6px; background: linear-gradient(145deg, rgba(255, 247, 234, 0.95), rgba(246, 226, 198, 0.88)); }
+.pd-app[data-theme='dark'] .uni-attention { background: linear-gradient(145deg, rgba(92, 64, 30, 0.86), rgba(40, 32, 44, 0.84)); }
+.uni-attention > .row { padding: 0 18px 6px; }
+.uni-rows { display: grid; }
+.uni-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px 18px; border: 0; border-top: 1px solid var(--pd-line); background: transparent; text-align: left; font: inherit; color: inherit; cursor: pointer; min-height: 56px; }
+.uni-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.uni-tile { display: grid; gap: 4px; align-content: start; min-height: 132px; padding: 16px; text-align: left; font: inherit; border: 0; cursor: default; }
+button.uni-tile { cursor: pointer; }
+.uni-tile__icon { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; background: var(--pd-circle-bg); color: var(--pd-link-surface); margin-bottom: 4px; }
+.uni-tile__big { font-size: var(--pd-font-xl); font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+.uni-tile__label { font-weight: 600; font-size: var(--pd-font-sm); line-height: 1.25; }
+.uni-tile__warn { color: var(--pd-warn); font-weight: 600; }
+.uni-ring { --p: 0; width: 52px; height: 52px; border-radius: 50%; margin-bottom: 4px;
+  background: radial-gradient(closest-side, var(--pd-circle-bg) 74%, transparent 75% 100%), conic-gradient(var(--pd-ok) calc(var(--p) * 1%), var(--pd-surface-3) 0); }
+.uni-dashed { display: grid; gap: 8px; padding: 18px; border: 2px dashed rgba(255, 255, 255, 0.55); border-radius: 28px; color: var(--pd-text); }
+.uni-dashed > button { justify-self: start; }
+.uni-recent { display: grid; gap: 0; padding: 4px 0; }
+.uni-recent__row { display: grid; gap: 2px; padding: 10px 18px; border-top: 1px solid var(--pd-line); }
+.uni-recent__row:first-child { border-top: 0; }
+.uni-faculty { display: grid; gap: 12px; }
+.uni-badge, .hb-impact__badge { flex: none; min-width: 44px; height: 44px; padding: 0 6px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--pd-brand-grad); color: #fff; font-weight: 700; font-size: 13px; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.36); }
+.hb-impact__badge { min-width: 36px; height: 36px; font-size: 12px; }
+.uni-admins { display: grid; gap: 10px; }
+.uni-avatar { flex: none; width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; background: var(--pd-brand-grad); color: #fff; font-weight: 700; font-size: 13px; }
+.uni-avatar--pending { background: var(--pd-surface-3); color: var(--pd-on-surface); }
+.uni-avatar--lg { width: 56px; height: 56px; font-size: 18px; }
+.uni-pending { color: var(--pd-warn); font-weight: 600; }
+.uni-profile { display: flex; align-items: center; gap: 14px; }
+.uni-switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-radius: 20px; background: var(--pd-surface-2); }
+.uni-switch input { width: 24px; height: 24px; accent-color: var(--pd-selected); flex: none; }
+
+/* ─── Общая страница у факультета ─── */
+.hb-shared-note { display: grid; gap: 10px; }
+.hb-shared-note--warn { background: linear-gradient(145deg, rgba(255, 247, 234, 0.95), rgba(246, 226, 198, 0.88)); }
+.pd-app[data-theme='dark'] .hb-shared-note--warn { background: linear-gradient(145deg, rgba(92, 64, 30, 0.86), rgba(40, 32, 44, 0.84)); }
+.hb-shared-note > .linkbtn, .hb-shared-note > button { justify-self: start; }
+.hb-reader-round--warn { color: var(--pd-warn); background: color-mix(in srgb, var(--pd-warn) 14%, transparent); }
+.hb-shared-source, .hb-impact, .hb-ownership, .hb-override-info, .hb-local-editor, .hb-shared-choice { display: grid; gap: 12px; }
+.hb-ownership--overdue { box-shadow: inset 3px 0 0 var(--pd-risk), var(--pd-glass-shadow); }
+.hb-kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 14px; margin: 0; font-size: var(--pd-font-sm); }
+.hb-kv dt { color: var(--pd-muted); }
+.hb-kv dd { margin: 0; font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.hb-kv .hb-kv--risk { color: var(--pd-risk); }
+.hb-kv .hb-kv--warn { color: var(--pd-warn); }
+.hb-shared-ro { display: grid; gap: 10px; }
+.hb-shared-ro__head { display: flex; align-items: center; gap: 8px; color: var(--pd-muted); font-size: var(--pd-font-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.hb-shared-ro .hb-reader-blocks > :is(.card, .hb-text) { background: none; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; padding-inline: 0; }
+.hb-anchor { display: flex; align-items: center; gap: 8px; color: var(--pd-muted); font-size: var(--pd-font-xs); font-weight: 600; margin: -6px 4px; }
+.hb-anchor::before, .hb-anchor::after { content: ''; flex: 1; height: 1px; background: rgba(255, 255, 255, 0.4); }
+.hb-local-editor { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--pd-local) 45%, transparent), var(--pd-glass-shadow); }
+.hb-consequences { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.hb-consequences li { display: flex; gap: 12px; align-items: flex-start; font-size: var(--pd-font-sm); line-height: 1.4; }
+.hb-consequences .pd-icon { flex: none; color: var(--pd-link); margin-top: 1px; }
+.hb-impact__list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
+.hb-impact__list li { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--pd-line); }
+.hb-impact__list li:first-child { border-top: 0; }
+.hb-impact__list--sheet { background: var(--pd-surface-2); border-radius: 20px; padding: 2px 14px; }
+.hb-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.hb-chip__n { margin-left: 6px; opacity: 0.75; font-variant-numeric: tabular-nums; }
+.hb-shared-entry { display: flex; align-items: center; gap: 12px; text-align: left; }
+.hb-editblock__note { display: flex; align-items: center; gap: 6px; padding: 0 16px 12px 66px; color: var(--pd-local); font-weight: 600; }
+.hb-diff { display: grid; gap: 6px; font-size: var(--pd-font-sm); line-height: 1.4; }
+.hb-diff__label { font-size: var(--pd-font-xs); font-weight: 600; color: var(--pd-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.hb-diff__del { padding: 8px 12px; border-radius: 12px; background: color-mix(in srgb, var(--pd-risk) 11%, transparent); text-decoration: line-through; text-decoration-color: var(--pd-risk); }
+.hb-diff__add { padding: 8px 12px; border-radius: 12px; background: color-mix(in srgb, var(--pd-ok) 12%, transparent); }
+
+/* ─── У студента: уточнение факультета внутри общей страницы ─── */
+.hb-local { display: grid; gap: 10px; padding: 14px; border-radius: 20px; background: color-mix(in srgb, var(--pd-local) 10%, transparent); }
+.hb-local__who { font-size: var(--pd-font-xs); font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--pd-local); }
+.hb-local > :is(.card, .hb-text) { background: none; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; padding: 0; }
+
+@media (min-width: 900px) {
+  .uni-tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+/* Док кабинета: «Факультеты» длиннее остальных подписей — ширина по содержимому, а не поровну */
+.pd-app .uni-dock button { flex: 1 1 auto; padding-inline: 8px; }
+@media (max-width: 340px) { .pd-app .uni-dock button { padding-inline: 4px; } .pd-app .uni-dock button span { letter-spacing: -0.01em; } }
+
+/* Карточка факультета: метка и название всегда в одну строку, длинное название переносится рядом с меткой */
+.uni-faculty__head { gap: 12px; align-items: flex-start; flex-wrap: nowrap; }
+.uni-faculty__head > .stack { flex: 1; }
+.uni-badge { border-radius: 999px; }
+
+/* Длинные подписи кнопок переносятся, а не обрезаются */
+.pd-app .hb-ownership button { white-space: normal; height: auto; min-height: 44px; text-align: center; line-height: 1.25; }
+.pd-app .hb-ownership > button { padding-block: 10px; }
+
+/* ─── Для каких факультетов, справка по статусам ─── */
+.hb-scope { display: grid; gap: 12px; }
+.hb-scope .hb-chips { flex-wrap: wrap; }
+.hb-guide { display: grid; gap: 18px; }
+.hb-guide__part { display: grid; gap: 8px; }
+.hb-guide__steps { margin: 0; padding-left: 20px; display: grid; gap: 6px; font-size: var(--pd-font-sm); line-height: 1.4; }
+.hb-guide__state { display: grid; gap: 4px; justify-items: start; padding: 10px 12px; border-radius: 16px; background: var(--pd-surface-2); }
+.hb-impact > .linkbtn { justify-self: start; }
+
+/* Почему страница требует внимания и как снять отметку */
+.hb-why { display: grid; gap: 14px; border: 1.5px solid color-mix(in srgb, var(--pd-warn, #c27a12) 45%, transparent); }
+.hb-why__item { display: grid; gap: 6px; }
+.hb-why__item + .hb-why__item { border-top: 1px solid var(--pd-line, rgba(23, 35, 58, .1)); padding-top: 12px; }
+.hb-why__title { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; }
+.hb-why__quotes { display: grid; gap: 4px; padding: 8px 12px; border-radius: 14px; background: var(--pd-surface-2); }
+.hb-why__quotes q { quotes: '«' '»'; }
+.hb-guide-link { display: inline-flex; align-items: center; gap: 6px; justify-self: start; }
+
+/* Поиск по названиям страниц в редакции */
+.hb-editor-search { position: relative; display: block; }
+.hb-editor-search svg { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--pd-muted); pointer-events: none; }
+.hb-editor-search .hb-input { padding-left: 42px; }
+
+/* Справочники факультета: управление и выбор общих страниц */
+.hb-handbook-manage { display: grid; gap: 10px; }
+.hb-handbook-manage .hb-handbook-card { padding: 0; background: none; box-shadow: none; border: 0; }
+.hb-handbook-manage .hb-danger-link { justify-self: start; }
+.hb-handbook-manage--closed { opacity: .92; }
+.hb-choice { display: grid; gap: 8px; }
+.hb-choice__item { display: grid; gap: 4px; text-align: left; padding: 12px 14px; border-radius: 16px; border: 1.5px solid var(--pd-line); background: var(--pd-surface-2); color: inherit; font: inherit; cursor: pointer; }
+.hb-choice__item--on { border-color: var(--pd-accent); background: color-mix(in srgb, var(--pd-accent) 8%, var(--pd-surface-2)); }

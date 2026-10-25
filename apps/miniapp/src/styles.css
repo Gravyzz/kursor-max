@@ -304,6 +304,9 @@ button.hb-announce__main { cursor: pointer; }
   color: var(--pd-text); padding: 11px 16px; font: inherit; font-size: var(--pd-font-md); font-weight: 500; min-height: 44px;
 }
 .hb-input--sub { font-size: var(--pd-font-sm); min-height: 40px; }
+/* Раскрытый список рисует система на белом фоне: светлый текст темы там не читается — пункты всегда тёмным по светлому */
+.hb-select option, .hb-select optgroup { color: #17233a; background-color: #ffffff; }
+.hb-select option:disabled { color: #6b7790; }
 .hb-select {
   appearance: none; -webkit-appearance: none; padding-right: 40px; cursor: pointer;
   background-image: linear-gradient(45deg, transparent 50%, var(--pd-faint) 50%), linear-gradient(135deg, var(--pd-faint) 50%, transparent 50%);
@@ -979,3 +982,20 @@ button.hb-announce__main { cursor: pointer; }
 .pd-app[data-theme='dark'] .hb-circle, .pd-app[data-theme='dark'] .hb-back { color: var(--pd-on-surface); }
 /* Список в карточке: поля задают строки, у самой карточки — только тонкие отступы сверху и снизу */
 .card.hb-list { padding: 4px 0; gap: 0; }
+
+/* Правки опубликованной страницы, которые не дошли до студентов: заметная плашка, а не серая приписка */
+.hb-unpublished {
+  display: inline-flex; align-items: center; gap: 6px; align-self: start; margin-top: 4px;
+  padding: 4px 10px; border-radius: 999px; font-size: var(--pd-font-xs); font-weight: 600;
+  color: var(--pd-warn); background: color-mix(in srgb, var(--pd-warn) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pd-warn) 45%, transparent);
+}
+/* Фильтр «Требует внимания» с непустым счётчиком — счётчик цветом предупреждения */
+.hb-chip--alert:not(.hb-chip--on) .hb-chip__n { color: var(--pd-warn); opacity: 1; font-weight: 700; }
+
+/* Загруженный файл в блоке «Файл»: имя и размер */
+.hb-file-chosen {
+  display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 16px;
+  background: var(--pd-sunken); border: 1px solid var(--pd-control-line); color: var(--pd-text);
+}
+.hb-file-chosen__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

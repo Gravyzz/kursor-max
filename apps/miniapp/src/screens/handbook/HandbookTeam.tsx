@@ -21,7 +21,7 @@ const ROLE: Record<MemberRole, string> = { admin: 'Администратор', 
 export function HandbookTeam() {
   const hb = useHandbook();
   const { data, error, loading, reload } = useLoad(
-    (signal) => api<{ members: HandbookMember[]; role: 'admin' | 'editor' }>(hb.url('/api/handbook-editor/members'), { signal }),
+    (signal) => api<{ members: HandbookMember[]; role: 'admin' | 'editor'; canInviteAdmin?: boolean; myTitle?: string }>(hb.url('/api/handbook-editor/members'), { signal }),
     [hb.handbookId],
     `team:${hb.handbookId}`,
   );
@@ -59,6 +59,9 @@ export function HandbookTeam() {
   const members = data?.members ?? [];
   // Деканат администрирует справочник по должности и может не числиться в списке — роль берём из ответа
   const isAdmin = data?.role === 'admin';
+  // Администратора назначает только руководство: деканат или администратор факультета (университета — для общей базы)
+  const canInviteAdmin = data?.canInviteAdmin ?? isAdmin;
+  const manageable = (member: HandbookMember) => isAdmin && !member.you && (member.canManage ?? true);
 
   const invite = async () => {
     if (fullName.trim().length < 3) {
@@ -122,8 +125,10 @@ export function HandbookTeam() {
         </div>
         {roleHint ? (
           <div className="hb-hint" id="team-roles-hint" role="note">
-            <p><strong>Редактор</strong> готовит страницы и отвечает на вопросы студентов.</p>
-            <p><strong>Администратор</strong> публикует страницы, делает объявления и собирает команду.</p>
+            <p><strong>Деканат и администратор факультета</strong> — руководство справочника: их назначает университет. Они приглашают администраторов и редакторов.</p>
+            <p><strong>Администратор</strong> публикует страницы и объявления, приглашает редакторов.</p>
+            <p><strong>Редактор</strong> готовит страницы и отвечает на вопросы студентов; публикует администратор.</p>
+            <p className="muted">Менять роль и убирать из команды можно только тех, у кого роль ниже вашей.</p>
           </div>
         ) : null}
       </div>
@@ -147,12 +152,12 @@ export function HandbookTeam() {
           <span className={`hb-member-avatar ${avatarTone(member.fullName)}`} aria-hidden="true">{member.fullName.split(/\s+/).filter(Boolean).slice(0, 2).map((word) => word[0]).join('')}</span>
           <span className="stack hb-member-info" style={{ gap: 6 }}>
             <strong>{member.fullName}{member.you ? <span className="muted"> · вы</span> : null}</strong>
-            <span className="small muted">{ROLE[member.role]} · {member.connected ? 'в MAX' : 'ждём входа'}</span>
+            <span className="small muted">{member.title ?? ROLE[member.role]}{member.kind ? ` · ${member.kind}` : ''} · {member.connected ? 'в MAX' : 'ждём входа'}</span>
           </span>
-          {isAdmin && !member.you ? <button type="button" className="hb-circle hb-member-toggle"
+          {manageable(member) ? <button type="button" className="hb-circle hb-member-toggle"
             aria-label={`Действия участника ${member.fullName}`} aria-expanded={expanded === member.personId}
             aria-controls={`member-actions-${member.personId}`} onClick={() => setExpanded(expanded === member.personId ? null : member.personId)}><Icon name="settings" size={20} /></button> : null}
-          {isAdmin && !member.you && expanded === member.personId ? <div className="hb-member-actions" id={`member-actions-${member.personId}`}>
+          {manageable(member) && expanded === member.personId ? <div className="hb-member-actions" id={`member-actions-${member.personId}`}>
             <button type="button" className="hb-chip" onClick={() => { setEditingRole(member); setNextRole(member.role); }}><Icon name="user" size={18} />Изменить роль</button>
             {member.link ? <button type="button" className="hb-chip" onClick={() => share(member.fullName, member.link!)}><Icon name="link" size={18} />Ссылка-приглашение</button> : null}
             <button type="button" className="hb-chip hb-member-remove" aria-label={`Убрать ${member.fullName} из команды`} onClick={() => setRemoving(member)}><Icon name="trash" size={18} />Убрать из команды</button>
@@ -172,7 +177,7 @@ export function HandbookTeam() {
         <p className="muted">{editingRole.fullName}</p>
         <div className="hb-field"><span className="hb-field__label">Роль участника</span>
           <div className="hb-chips" role="radiogroup" aria-label="Роль участника">
-            {(['editor', 'admin'] as const).map((value) => <button key={value} type="button" role="radio" aria-checked={nextRole === value} disabled={roleBusy} className={`hb-chip ${nextRole === value ? 'hb-chip--on' : ''}`} onClick={() => setNextRole(value)}>{ROLE[value]}</button>)}
+            {(['editor', 'admin'] as const).map((value) => <button key={value} type="button" role="radio" aria-checked={nextRole === value} disabled={roleBusy || (value === 'admin' && !canInviteAdmin)} className={`hb-chip ${nextRole === value ? 'hb-chip--on' : ''}`} onClick={() => setNextRole(value)}>{ROLE[value]}</button>)}
           </div>
           <span className="small muted">{nextRole === 'editor' ? 'Готовит страницы и отвечает на вопросы. Публикует администратор.' : 'Публикует страницы и объявления, отвечает на вопросы и управляет командой.'}</span>
         </div>
@@ -194,7 +199,7 @@ export function HandbookTeam() {
         <Sheet title="Приглашение" onClose={() => setOpen(false)} dirty={fullName.trim().length > 0 && !busy}>
           <label className="hb-field">
             <span className="hb-field__label">Имя и фамилия</span>
-            <input className="hb-input" value={fullName} autoFocus maxLength={120} placeholder="Лебедева Ольга" onChange={(event) => setFullName(event.target.value)} />
+            <input className="hb-input" value={fullName} autoFocus maxLength={120} placeholder="Например: Лебедева Ольга Сергеевна" onChange={(event) => setFullName(event.target.value)} />
           </label>
           <div className="hb-field">
             <span className="hb-field__label">Кто это</span>
@@ -205,23 +210,28 @@ export function HandbookTeam() {
                 </button>
               ))}
             </div>
+            <span className="faint small">
+              {kind === 'student' ? 'Студент из студсовета или актива: помогает писать страницы и отвечать первокурсникам.' : 'Тьютор, куратор, сотрудник деканата или учебного офиса.'} Это подпись в списке команды — права задаются ниже.
+            </span>
           </div>
           <div className="hb-field">
             <span className="hb-field__label">Права</span>
             <div className="hb-chips" role="radiogroup" aria-label="Права">
               {([['editor', 'Редактор'], ['admin', 'Администратор']] as const).map(([value, label]) => (
-                <button key={value} type="button" role="radio" aria-checked={role === value} className={`hb-chip ${role === value ? 'hb-chip--on' : ''}`} onClick={() => setRole(value)}>
+                <button key={value} type="button" role="radio" aria-checked={role === value} disabled={value === 'admin' && !canInviteAdmin} className={`hb-chip ${role === value ? 'hb-chip--on' : ''}`} onClick={() => setRole(value)}>
                   {label}
                 </button>
               ))}
             </div>
             <span className="faint small">
-              {role === 'editor' ? 'Готовит страницы и отвечает на вопросы; публикует администратор.' : 'Всё, что редактор, плюс публикация, объявления и команда.'}
+              {role === 'editor' ? 'Готовит страницы и отвечает на вопросы; публикует администратор.' : 'Всё, что редактор, плюс публикация, объявления и приглашение редакторов.'}
+              {canInviteAdmin ? '' : ' Администратора назначает деканат или администратор факультета.'}
             </span>
           </div>
           <Button variant="primary" size="large" loading={busy} disabled={busy || fullName.trim().length < 3} onClick={invite}>
             Создать ссылку
           </Button>
+          {fullName.trim().length < 3 ? <span className="faint small">Чтобы создать ссылку, впишите имя и фамилию — от 3 символов.</span> : null}
         </Sheet>
       ) : null}
     </>

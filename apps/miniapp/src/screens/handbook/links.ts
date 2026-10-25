@@ -7,6 +7,7 @@ import type { HandbookRoute } from './context';
  *   hbp_<id страницы> — страница справочника
  *   hbe               — редактор справочника
  *   hbe_<id страницы> — страница в редакторе (из уведомления «ждёт проверки»)
+ *   hbs_<id уточнения> — уточнение факультета к общей странице (из уведомления «ждёт публикации»)
  *   dean              — экран деканата: создать справочник, команда
  * hb и hb_<слаг справочника> обрабатывает сервер: они выбирают сам справочник.
  */
@@ -15,6 +16,8 @@ export function handbookStartRoutes(param: string | null): HandbookRoute[] {
   if (param.startsWith('hbp_')) return [{ name: 'hb-page', id: param.slice(4) }];
   if (param === 'hbe' || param === 'hb_edit') return [{ name: 'hb-editor' }];
   if (param.startsWith('hbe_')) return [{ name: 'hb-editor' }, { name: 'hb-editor-page', id: param.slice(4) }];
+  // Сервер принимает id уточнения вместо id общей страницы и сам находит, к какой странице оно относится
+  if (param.startsWith('hbs_')) return [{ name: 'hb-editor' }, { name: 'hb-shared-page', id: param.slice(4) }];
   if (param === 'dean') return [{ name: 'hb-create' }];
   return [];
 }

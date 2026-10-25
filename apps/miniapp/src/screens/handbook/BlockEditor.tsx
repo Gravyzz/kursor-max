@@ -3,6 +3,9 @@ import type { Block, BlockType } from '../../lib/types';
 import { plural } from '../../lib/format';
 import { Sheet } from '../../components/ui';
 import { Icon, type IconName } from '../../components/icons';
+import { Button } from '@maxhub/max-ui';
+import { api } from '../../lib/api';
+import { useHandbook } from './context';
 
 /**
  * Конструктор страницы: блоки добавляются, редактируются и переставляются с телефона.
@@ -19,7 +22,7 @@ export const BLOCK_LABEL: Record<BlockType, { title: string; hint: string; icon:
   place: { title: 'Место', hint: 'Адрес и как найти', icon: 'pin' },
   deadline: { title: 'Срок', hint: 'Дата, о которой напомнит бот', icon: 'clock' },
   link: { title: 'Ссылка', hint: 'На сайт или форму', icon: 'link' },
-  file: { title: 'Файл', hint: 'Шаблон заявления, бланк', icon: 'file' },
+  file: { title: 'Файл', hint: 'Бланк или шаблон — загрузите с телефона', icon: 'file' },
   alert: { title: 'Важное', hint: 'Предупреждение или пометка', icon: 'warn' },
   chat: { title: 'Чат в MAX', hint: 'Официальный чат', icon: 'chat' },
   glossary: { title: 'Словарь', hint: 'Термины и их значения', icon: 'book' },
@@ -46,9 +49,11 @@ export function emptyBlock(type: BlockType): Block {
     case 'deadline':
       return { id, type, title: '', startsOn: new Date().toISOString().slice(0, 10) };
     case 'link':
-    case 'file':
     case 'chat':
       return { id, type, title: '', url: '' };
+    // Файл загружают в приложение: ссылки у нового блока нет
+    case 'file':
+      return { id, type, title: '' };
     case 'alert':
       return { id, type, tone: 'info', text: '' };
     case 'glossary':
@@ -138,8 +143,12 @@ export function blockProblem(block: Block): string | null {
       if (blank(block.startsOn)) return 'Укажите дату начала';
       if (block.endsOn && block.endsOn < block.startsOn) return 'Конец раньше начала';
       return null;
-    case 'link':
     case 'file':
+      if (blank(block.title)) return 'Заполните название';
+      if (block.fileId) return null;
+      // Старый блок со ссылкой продолжает работать, пока файл не загрузили
+      return block.url ? urlProblem(block.url) : 'Загрузите файл';
+    case 'link':
     case 'chat':
       if (blank(block.title)) return 'Заполните название';
       if (blank(block.url)) return 'Вставьте ссылку';
@@ -172,8 +181,9 @@ export function cleanBlock(block: Block): Block {
       return omitBlank(block, ['address', 'howTo', 'mapLink']);
     case 'deadline':
       return omitBlank(block, ['endsOn']);
-    case 'link':
     case 'file':
+      return omitBlank(block, ['note', 'url', 'fileName']);
+    case 'link':
     case 'chat':
       return omitBlank(block, ['note']);
     case 'alert':
@@ -439,10 +449,10 @@ export function BlockForm({ block, onChange }: { block: Block; onChange: (block:
             <input className="hb-input" value={block.role ?? ''} maxLength={120} onChange={(event) => set({ role: event.target.value })} />
           </Field>
           <Field label="Где">
-            <input className="hb-input" value={block.room ?? ''} maxLength={120} placeholder="Корпус 2, каб. 121" onChange={(event) => set({ room: event.target.value })} />
+            <input className="hb-input" value={block.room ?? ''} maxLength={120} placeholder="Например: корпус 2, каб. 121" onChange={(event) => set({ room: event.target.value })} />
           </Field>
           <Field label="Когда">
-            <input className="hb-input" value={block.hours ?? ''} maxLength={200} placeholder="Пн–Пт 10:00–17:00" onChange={(event) => set({ hours: event.target.value })} />
+            <input className="hb-input" value={block.hours ?? ''} maxLength={200} placeholder="Например: пн–пт 10:00–17:00" onChange={(event) => set({ hours: event.target.value })} />
           </Field>
           <Field label="Телефон">
             <input className="hb-input" value={block.phone ?? ''} maxLength={40} inputMode="tel" onChange={(event) => set({ phone: event.target.value })} />
@@ -483,8 +493,19 @@ export function BlockForm({ block, onChange }: { block: Block; onChange: (block:
           <span className="faint small">Бот напомнит о сроке за 3 дня и накануне — тем, кто включил напоминания.</span>
         </>
       );
-    case 'link':
     case 'file':
+      return (
+        <>
+          <Field label="Название" hint="Как файл увидят студенты: например, «Шаблон заявления на матпомощь»">
+            <input className="hb-input" value={block.title} maxLength={200} onChange={(event) => set({ title: event.target.value })} />
+          </Field>
+          <FileField block={block} onChange={set} />
+          <Field label="Пояснение (необязательно)">
+            <input className="hb-input" value={block.note ?? ''} maxLength={300} placeholder="Например: заполните и принесите в деканат" onChange={(event) => set({ note: event.target.value })} />
+          </Field>
+        </>
+      );
+    case 'link':
     case 'chat': {
       const chat = block.type === 'chat';
       return (
@@ -560,6 +581,7 @@ export function BlockCard({
   onMove,
   defaultOpen = false,
   problem,
+  note,
 }: {
   block: Block;
   index: number;
@@ -571,6 +593,8 @@ export function BlockCard({
   defaultOpen?: boolean;
   /** Что мешает опубликовать этот блок. */
   problem?: string | null;
+  /** Пометка у блока: например, к нему прикреплены уточнения факультетов. */
+  note?: string | null;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   // Удаление в два касания: случайный тап по ✕ не должен стирать заполненный блок
@@ -606,6 +630,7 @@ export function BlockCard({
           <Icon name="more" size={20} />
         </button>
       </div>
+      {note ? <span className="hb-editblock__note small"><Icon name="pin" size={14} />{note}</span> : null}
       {tools ? (
         <div className="hb-editblock__tools" id={`block-tools-${block.id}`} role="group" aria-label={`Блок «${label.title}»`}>
           <button type="button" className="hb-chip" disabled={index === 0} onClick={() => onMove(-1)}><Icon name="up" size={16} />Выше</button>
@@ -660,4 +685,73 @@ function summaryOf(block: Block): string {
     default:
       return '';
   }
+}
+
+
+/** Как на сервере (services/files.ts): документы, таблицы, презентации, картинки, текст и ZIP — до 10 МБ. */
+const FILE_EXTENSIONS = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'rtf', 'txt', 'csv', 'jpg', 'jpeg', 'png', 'zip'];
+const MAX_FILE_BYTES = 10 * 1024 * 1024;
+
+/** «240 КБ», «1,4 МБ». */
+export function fileSizeText(bytes: number | undefined): string {
+  if (!bytes) return '';
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} КБ`;
+  return `${(bytes / 1024 / 1024).toFixed(1).replace('.', ',')} МБ`;
+}
+
+function readAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).replace(/^data:[^,]*,/, ''));
+    reader.onerror = () => reject(new Error('Файл не прочитался — выберите его ещё раз'));
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * Файл загружается прямо в приложение: выбрал с телефона — студент открывает его со страницы.
+ * Название блока подставляется из имени файла, если его ещё не написали.
+ */
+function FileField({ block, onChange }: { block: Extract<Block, { type: 'file' }>; onChange: (patch: Record<string, unknown>) => void }) {
+  const hb = useHandbook();
+  const input = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const pick = async (file: File | undefined) => {
+    if (!file) return;
+    setError(null);
+    const ext = /\.([a-z0-9]{1,5})$/i.exec(file.name)?.[1]?.toLowerCase() ?? '';
+    if (!FILE_EXTENSIONS.includes(ext)) return setError('Такой файл не подойдёт. Загрузите PDF, Word, Excel, PowerPoint, картинку JPG или PNG, текст или архив ZIP');
+    if (file.size === 0) return setError('Файл пустой — выберите другой');
+    if (file.size > MAX_FILE_BYTES) return setError(`Файл ${fileSizeText(file.size)} — больше 10 МБ. Сожмите его или разделите на части`);
+    setBusy(true);
+    try {
+      const data = await readAsBase64(file);
+      const saved = await api<{ id: string; name: string; size: number }>(hb.url('/api/handbook-editor/files'), { method: 'POST', body: { name: file.name, data } });
+      onChange({ fileId: saved.id, fileName: saved.name, fileSize: saved.size, url: undefined, ...(block.title.trim() ? {} : { title: saved.name.replace(/\.[^.]+$/, '') }) });
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+      if (input.current) input.current.value = '';
+    }
+  };
+  return (
+    <div className="hb-field">
+      <span className="hb-field__label">Файл</span>
+      {block.fileId ? (
+        <span className="hb-file-chosen">
+          <Icon name="file" size={20} />
+          <span className="stack" style={{ gap: 2, minWidth: 0 }}><strong className="hb-file-chosen__name">{block.fileName ?? 'Файл'}</strong><span className="small muted">{fileSizeText(block.fileSize)}</span></span>
+        </span>
+      ) : block.url ? (
+        <span className="small hb-attention">Сейчас вместо файла ссылка: {block.url}. Загрузите файл — студенты будут открывать его прямо из справочника.</span>
+      ) : null}
+      <input ref={input} type="file" hidden accept={FILE_EXTENSIONS.map((e) => `.${e}`).join(',')} aria-label="Выбрать файл" onChange={(event) => void pick(event.target.files?.[0])} />
+      <Button variant="secondary" size="medium" loading={busy} disabled={busy} onClick={() => input.current?.click()}>
+        <Icon name="download" size={18} /> {block.fileId ? 'Заменить файл' : 'Выбрать файл'}
+      </Button>
+      {error ? <span className="small hb-error" role="alert">{error}</span> : <span className="faint small">PDF, Word, Excel, PowerPoint, JPG, PNG, TXT или ZIP — до 10 МБ</span>}
+    </div>
+  );
 }

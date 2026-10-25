@@ -3,7 +3,13 @@ import { one } from '../db/pool.js';
 
 export type NotificationKind =
   | 'welcome'
+  | 'handbook_base_changed'
+  | 'supplement_anchor_lost'
+  /** Подошёл срок проверки страницы: payload { pageId, reviewAt } — ответственному и замене, без них — администраторам. */
+  | 'page_review_due'
   | 'handbook_review'
+  /** Редактор отправил уточнение к общей странице: payload { supplementId, basePageId, handbookId, note } — администраторам факультета. */
+  | 'supplement_review'
   | 'handbook_answer'
   | 'handbook_announcement'
   | 'handbook_deadline'
@@ -83,6 +89,19 @@ export async function cancelPending(db: Db, dedupePrefix: string): Promise<void>
       WHERE status = 'pending' AND dedupe_key LIKE $1`,
     [`${dedupePrefix}%`],
   );
+}
+
+/**
+ * Отозвать уже отправленные сообщения: воркер удалит их из чатов (DELETE /messages).
+ * Строки «в отправке» тоже помечаем — если отправка всё же пройдёт, сообщение удалится следом.
+ */
+export async function retractSent(db: Db, dedupePrefix: string): Promise<number> {
+  const result = await db.query(
+    `UPDATE notifications SET retract_requested_at = now()
+      WHERE status IN ('sent', 'sending') AND retract_requested_at IS NULL AND dedupe_key LIKE $1`,
+    [`${dedupePrefix}%`],
+  );
+  return result.rowCount ?? 0;
 }
 
 export interface EnqueueReaderInput {

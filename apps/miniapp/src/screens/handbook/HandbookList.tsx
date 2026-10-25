@@ -65,7 +65,9 @@ export function HandbookList() {
     <>
       <div className="hb-page__head">
         <h1 className="hb-page__title">Справочники</h1>
-        <p className="hb-page__summary">Бот запомнит выбор: в следующий раз откроется последний справочник.</p>
+        <p className="hb-page__summary">{/-demo-/.test(hb.home.data?.handbook.slug ?? '')
+          ? 'Только для демонстрации: в настоящем вузе справочник открывается по ссылке своего факультета, а новые факультеты подключает администратор университета.'
+          : 'Бот запомнит выбор: в следующий раз откроется последний справочник.'}</p>
       </div>
       <HandbookPicker currentId={hb.handbookId} onOpen={hb.openHandbook} />
       {hb.person && (hb.person.role === 'dean' || (hb.person.isDemo && hb.person.role === 'staff'))

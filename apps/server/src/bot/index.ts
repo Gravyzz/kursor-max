@@ -10,6 +10,7 @@ import { allowMessage, INVITE_RE } from './guards.js';
 import { md, welcomeMessage } from '../notify/render.js';
 import { bindInvite, normalizeInviteCode, upsertUser, type UserRow } from '../services/identity.js';
 import { createDemoSandbox, getDemoRole, setDemoRole, type DemoRole } from '../services/demo.js';
+import { isPlatformAdmin } from '../services/platform.js';
 import {
   askQuestion, awaitChatQuestion, contextFor, logSearch, memberRole, openQuestionCount, questionLimitReached, search, takeChatQuestion,
   type HandbookContext,
@@ -73,6 +74,7 @@ const DEMO_LEAD: Record<DemoRole, string> = {
   student: 'Вы — студент 1 курса: спрашивайте прямо здесь, отмечайте чек-листы, задавайте вопросы дежурному.',
   editor: 'Вы — редактор из студсовета: правите страницы, отправляете их на проверку и отвечаете на вопросы студентов. Публикует деканат.',
   dean: 'Вы — сотрудник деканата: публикуете страницы, делаете объявления, собираете команду и создаёте справочники факультетов.',
+  university: 'Вы — администратор университета: ведёте общую базу для всех факультетов, подключаете факультеты и следите за актуальностью.',
 };
 
 /**
@@ -97,6 +99,7 @@ async function showHandbook(ctx: Ctx, user: UserRow, handbook: HandbookContext, 
       .join('\n'),
     [
       [appButton(identity, 'Открыть справочник', `hb_${handbook.handbook.slug}`)],
+      ...(demoRole === 'university' ? [[appButton(identity, 'Кабинет университета', 'uni')]] : []),
       ...(editorRole ? [[appButton(identity, 'Редактор справочника', 'hbe')]] : []),
       ...(demoRole ? [[callbackButton('Сменить роль', 'demo:role'), callbackButton('Сбросить демо', 'demo:reset')]] : []),
     ],
@@ -115,12 +118,13 @@ async function askDemoRole(ctx: Ctx) {
       '• Студент — ищет ответы, отмечает чек-листы, задаёт вопросы.',
       '• Редактор (студсовет) — правит страницы, отправляет на проверку, отвечает на вопросы.',
       '• Деканат — публикует, делает объявления, собирает команду.',
+      '• Университет — ведёт общую базу для всех факультетов и подключает второй факультет.',
       '',
       'Роль можно сменить в любой момент — сделанное сохранится. В настоящем вузе роль выдаёт деканат личной ссылкой.',
     ].join('\n'),
     [
       [callbackButton('Студент', 'demo:as:student'), callbackButton('Редактор', 'demo:as:editor')],
-      [callbackButton('Деканат', 'demo:as:dean')],
+      [callbackButton('Деканат', 'demo:as:dean'), callbackButton('Университет', 'demo:as:university')],
     ],
   );
 }
@@ -288,7 +292,7 @@ async function handleStart(ctx: Ctx, payload: string | null) {
   const raw = (payload ?? '').trim();
   // Служебные параметры не зависят от регистра: ссылку могли набрать руками. Код приглашения проверяется как есть.
   const value = /^(demo|hb)(_|$)/i.test(raw) ? raw.toLowerCase() : raw;
-  const demoAs = /^demo_(student|editor|dean)$/.exec(value);
+  const demoAs = /^demo_(student|editor|dean|university)$/.exec(value);
   if (demoAs) return startDemo(ctx, identity, demoAs[1] as DemoRole);
   if (value === 'demo' || value.startsWith('demo_')) return askDemoRole(ctx);
   if (value === 'hb' || value.startsWith('hb_')) {
@@ -385,6 +389,22 @@ export function registerHandlers(bot: Bot) {
   bot.command(/^demo$/, async (ctx) => askDemoRole(ctx));
   bot.command(/^reset$/, async (ctx) => confirmResetDemo(ctx));
   bot.command(/^spravka$/, async (ctx) => handleStart(ctx, 'hb'));
+  // id пользователя MAX — чтобы команда Курсора могла вписать себя в PLATFORM_ADMIN_IDS
+  bot.command(/^myid$/, async (ctx) => {
+    const userId = (ctx.user as { user_id?: number } | undefined)?.user_id;
+    return send(ctx, userId ? `Ваш id в MAX: ${userId}` : 'Не удалось определить id');
+  });
+  // Кабинет платформы — только команде Курсора; остальным команда не существует
+  bot.command(/^platform$/, async (ctx) => {
+    const user = await currentUser(ctx);
+    if (!user || !isPlatformAdmin(user)) return send(ctx, `Такой команды нет. ${COMMANDS_HINT}`);
+    const identity = await getBotIdentity();
+    return send(
+      ctx,
+      ['**Кабинет платформы**', 'Подключайте вузы и отправляйте личные ссылки их администраторам. Дальше вуз сам подключает факультеты.'].join('\n'),
+      [[appButton(identity, 'Открыть кабинет платформы', 'platform')]],
+    );
+  });
   bot.command(/^help$/, async (ctx) =>
     send(
       ctx,
@@ -456,7 +476,7 @@ export function registerHandlers(bot: Bot) {
     await askDemoRole(ctx);
   });
 
-  bot.action(/^demo:as:(student|editor|dean)$/, async (ctx) => {
+  bot.action(/^demo:as:(student|editor|dean|university)$/, async (ctx) => {
     await answer(ctx, 'Открываю демо…');
     const role = ((ctx.match as RegExpMatchArray | null)?.[1] ?? 'dean') as DemoRole;
     await startDemo(ctx, await getBotIdentity(), role);

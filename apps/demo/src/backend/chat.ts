@@ -50,9 +50,19 @@ class ChatStore {
     return `${prefix}${Date.now().toString(36)}${this.seq}`;
   }
 
-  push(message: Omit<ChatMessage, 'id' | 'at'>) {
-    this.messages = [...this.messages, { ...message, id: this.nextId('m'), at: Date.now() }];
+  push(message: Omit<ChatMessage, 'id' | 'at'>, id = this.nextId('m')) {
+    this.messages = [...this.messages, { ...message, id, at: Date.now() }];
     this.emit();
+    return id;
+  }
+
+  /** Бот удалил своё сообщение (объявление удалили в приложении). */
+  remove(id: string) {
+    const next = this.messages.filter((message) => message.id !== id);
+    if (next.length === this.messages.length) return false;
+    this.messages = next;
+    this.emit();
+    return true;
   }
 
   toast(text: string) {
@@ -93,8 +103,13 @@ class DemoBot {
 
   api = {
     sendMessageToUser: async (_userId: number, text: string, extra?: { attachments?: unknown }) => {
-      chat.push({ from: 'bot', text, buttons: buttonsFrom(extra?.attachments) });
-      return { body: { mid: chat.nextId('mid') } };
+      // id сообщения в ленте — тот же, что вернёт «MAX»: по нему воркер потом удалит сообщение
+      const mid = chat.push({ from: 'bot', text, buttons: buttonsFrom(extra?.attachments) }, chat.nextId('mid'));
+      return { body: { mid } };
+    },
+    deleteMessage: async (mid: string) => {
+      chat.remove(mid);
+      return { success: true };
     },
     getMyInfo: async () => ({ username: 'spravochnik_bot', user_id: 900001, name: 'Справочник' }),
     setMyCommands: async () => undefined,

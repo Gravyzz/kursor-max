@@ -44,8 +44,8 @@ const insertId = async (client: TxClient, sql: string, values: unknown[]) =>
  * Роль посетителя в демо. Настоящий вуз даёт роль только по личному приглашению деканата;
  * в демо её выбирают сами, чтобы увидеть продукт глазами студента, редактора или деканата.
  */
-export type DemoRole = 'student' | 'editor' | 'dean';
-export const DEMO_ROLES: readonly DemoRole[] = ['student', 'editor', 'dean'];
+export type DemoRole = 'student' | 'editor' | 'dean' | 'university';
+export const DEMO_ROLES: readonly DemoRole[] = ['student', 'editor', 'dean', 'university'];
 
 export interface DemoSandbox {
   universityId: string;
@@ -65,6 +65,7 @@ interface SandboxRef {
   visitorId: string;
   visitorUserId: number | null;
   visitorRole: string;
+  visitorUniAdmin: boolean;
   handbookId: string;
   handbookSlug: string;
 }
@@ -73,19 +74,22 @@ async function findSandbox(db: Db, userId: number): Promise<SandboxRef | null> {
   const ref = await one<SandboxRef>(
     db,
     `SELECT u.id AS "universityId", p.id AS "visitorId", p.user_id AS "visitorUserId", p.role AS "visitorRole",
+            EXISTS (SELECT 1 FROM org_roles r WHERE r.person_id = p.id AND r.role = 'university_admin' AND r.revoked_at IS NULL) AS "visitorUniAdmin",
             h.id AS "handbookId", h.slug AS "handbookSlug"
        FROM universities u
        JOIN persons p ON p.university_id = u.id AND p.external_id = $2
        JOIN handbooks h ON h.university_id = u.id AND h.institute_id IS NOT NULL
       WHERE u.is_demo AND u.demo_owner_user_id = $1
-      ORDER BY h.created_at
+      -- справочник посетителя — ИИТ; экономический факультет в песочнице для сценария университета
+      ORDER BY (h.slug LIKE 'iit-demo-%') DESC, h.created_at
       LIMIT 1`,
     [userId, VISITOR_CODE],
   );
   return ref ?? null;
 }
 
-const roleOf = (ref: SandboxRef): DemoRole => (ref.visitorUserId === null ? 'student' : ref.visitorRole === 'dean' ? 'dean' : 'editor');
+const roleOf = (ref: SandboxRef): DemoRole =>
+  ref.visitorUserId === null ? 'student' : ref.visitorUniAdmin ? 'university' : ref.visitorRole === 'dean' ? 'dean' : 'editor';
 
 /** Текущая роль в демо или null, если у пользователя нет песочницы. */
 export async function getDemoRole(db: Db, userId: number): Promise<DemoRole | null> {
@@ -99,6 +103,20 @@ export async function getDemoRole(db: Db, userId: number): Promise<DemoRole | nu
  * деканат — сотрудник деканата, администратор справочника по должности.
  */
 async function applyDemoRole(client: Db, userId: number, ref: { visitorId: string; handbookId: string }, role: DemoRole) {
+  // Администратор университета — назначение, а не роль записи: у других ролей его нет
+  await client.query("DELETE FROM org_roles WHERE person_id = $1 AND role = 'university_admin'", [ref.visitorId]);
+  if (role === 'university') {
+    await client.query("UPDATE persons SET user_id = $2, role = 'staff' WHERE id = $1", [ref.visitorId, userId]);
+    // Справочники факультетов администратор университета смотрит, но не правит: членство в ИИТ снимаем
+    await client.query('DELETE FROM handbook_members WHERE handbook_id = $1 AND person_id = $2', [ref.handbookId, ref.visitorId]);
+    await client.query(
+      `INSERT INTO org_roles(person_id, university_id, role)
+       SELECT id, university_id, 'university_admin' FROM persons WHERE id = $1`,
+      [ref.visitorId],
+    );
+    await client.query('UPDATE users SET active_person_id = $2 WHERE id = $1', [userId, ref.visitorId]);
+    return;
+  }
   if (role === 'student') {
     await client.query('UPDATE persons SET user_id = NULL WHERE id = $1', [ref.visitorId]);
     await client.query('UPDATE users SET active_person_id = NULL WHERE id = $1 AND active_person_id = $2', [userId, ref.visitorId]);
@@ -194,7 +212,7 @@ async function buildDemoSandbox(client: TxClient, user: UserRow, role: DemoRole)
 
     // Модельные читатели: у части есть аккаунты MAX (отрицательные id — сообщения им только имитируются)
     const modelUsers: number[] = [];
-    for (let i = 0; i < 28; i += 1) {
+    for (let i = 0; i < 30; i += 1) {
       const row = await one<{ id: number }>(
         client,
         'INSERT INTO users(max_user_id, first_name, username) VALUES ($1, $2, $3) RETURNING id',
@@ -206,7 +224,7 @@ async function buildDemoSandbox(client: TxClient, user: UserRow, role: DemoRole)
     const students: string[] = [];
     for (let i = 0; i < 40; i += 1) {
       const groupName = groupNames[i % groupNames.length]!;
-      students.push(await person('student', fakeName(random), i < modelUsers.length ? modelUsers[i]! : null, groups[groupName]!, `2025-${String(1000 + i)}`));
+      students.push(await person('student', fakeName(random), i < 28 ? modelUsers[i]! : null, groups[groupName]!, `2025-${String(1000 + i)}`));
     }
 
     // Студсовет ведёт справочник вместе с деканатом
@@ -218,6 +236,9 @@ async function buildDemoSandbox(client: TxClient, user: UserRow, role: DemoRole)
       editorPersonId: editorIds[0]!,
       deanPersonId: deanId,
       readerPersonIds: students,
+      economicsModelUsers: modelUsers.slice(20, 28),
+      // Администраторы факультетов ИИТ и ЭФ уже вошли по своим ссылкам; второй администратор ЭФ — ещё нет
+      adminModelUsers: modelUsers.slice(28, 30),
     });
     await client.query(
       "INSERT INTO handbook_members(handbook_id, person_id, role) VALUES ($1, $2, 'editor') ON CONFLICT DO NOTHING",

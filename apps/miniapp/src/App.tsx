@@ -8,6 +8,8 @@ import type { DemoRole, HandbookHome, HandbookRef, Me } from './lib/types';
 import { Onboarding } from './screens/Onboarding';
 import { HandbookShell } from './screens/handbook/HandbookShell';
 import { HandbookCreatePanel } from './screens/handbook/HandbookCreate';
+import { UniversityShell } from './screens/university/UniversityShell';
+import { PlatformShell } from './screens/platform/PlatformShell';
 import { Icon } from './components/icons';
 
 /**
@@ -21,6 +23,8 @@ export function App() {
   // Параметр запуска применяем только к первому открытому справочнику
   const [startParam, setStartParam] = useState<string | null>(null);
   const [fatal, setFatal] = useState<ApiError | Error | null>(null);
+  // Администратор университета работает в кабинете; справочник факультета открывает для просмотра
+  const [space, setSpace] = useState<'platform' | 'university' | 'handbook'>('handbook');
   const toast = useToastState();
 
   const loadMe = useCallback(async (applyStart: boolean) => {
@@ -28,7 +32,13 @@ export function App() {
     setActivePersonId(data.person?.id ?? null);
     setMe(data);
     setHandbook(data.handbook);
-    if (applyStart) setStartParam(bridge.startParam ?? data.startParam);
+    const start = applyStart ? bridge.startParam ?? data.startParam : null;
+    if (applyStart) setStartParam(start);
+    // Кабинет — по ссылке uni или по умолчанию; ссылка на страницу справочника открывает справочник
+    // Кабинет платформы — по ссылке platform из бота или если у команды Курсора нет ни вуза, ни справочника
+    if (data.platform && (start === 'platform' || (!data.university && !data.handbook))) setSpace('platform');
+    else if (data.university) setSpace(start && /^hb/.test(start) ? 'handbook' : 'university');
+    else setSpace('handbook');
     return data;
   }, []);
 
@@ -63,6 +73,7 @@ export function App() {
         // start — параметр запуска внутри справочника: страница с отсканированного плаката
         setStartParam(start ?? null);
         setHandbook({ id: home.handbook.id, slug: home.handbook.slug, title: home.handbook.title, emoji: home.handbook.emoji });
+        setSpace('handbook');
         window.scrollTo({ top: 0 });
       } catch (error) {
         toast.show((error as Error).message, 'error');
@@ -77,9 +88,10 @@ export function App() {
       const sandbox = await api<{ handbookId: string }>('/api/demo', { method: 'POST', body: role ? { role } : {} });
       clearLoadCache();
       setActivePersonId(null);
-      await loadMe(false);
+      const fresh = await loadMe(false);
       setStartParam(null);
       await openHandbook(sandbox.handbookId);
+      if (fresh.university) setSpace('university');
     },
     [loadMe, openHandbook],
   );
@@ -103,7 +115,8 @@ export function App() {
         await loadMe(false);
         setStartParam(null);
         await openHandbook(sandbox.handbookId);
-        toast.show(`Теперь вы — ${role === 'student' ? 'студент' : role === 'editor' ? 'редактор' : 'деканат'}`);
+        if (role === 'university') setSpace('university');
+        toast.show(`Теперь вы — ${role === 'student' ? 'студент' : role === 'editor' ? 'редактор' : role === 'dean' ? 'деканат' : 'администратор университета'}`);
       } catch (error) {
         toast.show((error as Error).message, 'error');
       }
@@ -139,6 +152,39 @@ export function App() {
     );
   }
 
+  if (me.platform && space === 'platform') {
+    return (
+      <>
+        <main className="screen">
+          <PlatformShell toast={toast.show} onClose={me.university || handbook ? () => { setSpace(me.university ? 'university' : 'handbook'); window.scrollTo({ top: 0 }); } : undefined} />
+        </main>
+        {toast.view}
+      </>
+    );
+  }
+
+  const inDemoUniversity = Boolean(me.demo) && Boolean(me.university) && Boolean(handbook && /-demo-/.test(handbook.slug));
+  if (me.university && space === 'university') {
+    return (
+      <>
+        <main className="screen">
+          <UniversityShell
+            key={me.university.id}
+            me={me}
+            toast={toast.show}
+            openHandbook={openHandbook}
+            refresh={refresh}
+            demoRole={inDemoUniversity ? me.demo!.role : null}
+            onResetDemo={inDemoUniversity ? resetDemo : undefined}
+            onChangeDemoRole={inDemoUniversity ? changeDemoRole : undefined}
+            startPageId={startParam && /^uni_[0-9a-f-]{36}$/i.test(startParam) ? startParam.slice(4) : null}
+          />
+        </main>
+        {toast.view}
+      </>
+    );
+  }
+
   if (handbook) {
     // Баннер демо — только в самой песочнице, а не в настоящем справочнике, который открыли по ссылке
     const inDemo = Boolean(me.demo) && /-demo-/.test(handbook.slug);
@@ -159,6 +205,7 @@ export function App() {
             demoRole={inDemo ? me.demo!.role : null}
             onResetDemo={inDemo ? resetDemo : undefined}
             onChangeDemoRole={inDemo ? changeDemoRole : undefined}
+            openUniversity={me.university ? () => { setSpace('university'); window.scrollTo({ top: 0 }); } : undefined}
           />
         </main>
         {toast.view}

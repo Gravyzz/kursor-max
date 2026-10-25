@@ -7,6 +7,7 @@ import type { HandbookHome, HandbookProfile as Profile } from '../../lib/types';
 import { ErrorState, Skeletons } from '../../components/ui';
 import { Icon, type IconName } from '../../components/icons';
 import { useTheme, type ThemePref } from '../../app/theme';
+import { StatusGuideSheet } from './StatusGuide';
 
 const THEMES: { value: ThemePref; label: string; icon: IconName }[] = [
   { value: 'dark', label: 'Тёмная', icon: 'moon' },
@@ -41,6 +42,7 @@ export function HandbookProfile() {
   const touched = useRef(new Set<keyof Choice>());
 
   const [previewSettings, setPreviewSettings] = useState(false);
+  const [guide, setGuide] = useState(false);
 
   if (loading && !data) return <Skeletons count={3} />;
   if (error && !data) return <ErrorState error={error} onRetry={reload} />;
@@ -112,7 +114,10 @@ export function HandbookProfile() {
         <h2 className="section-title" id="profile-work">Работа со справочником</h2>
         <div className="card hb-list">
           {hb.editorRole ? <button type="button" className="hb-list__row" onClick={() => hb.nav.push({ name: 'hb-analytics' })}><span className="hb-reader-round" aria-hidden="true"><Icon name="chart" /></span><span className="hb-list__title hb-reader-grow">Аналитика справочника</span><Icon name="chevron" /></button> : null}
-          {!hb.editorRole && hb.person?.role === 'dean' ? <button type="button" className="hb-list__row" onClick={() => hb.nav.push({ name: 'hb-create' })}><span className="hb-reader-round" aria-hidden="true"><Icon name="books" /></span><span className="hb-list__title hb-reader-grow">Справочники факультетов</span><Icon name="chevron" /></button> : null}
+          {hb.editorRole ? <button type="button" className="hb-list__row" onClick={() => setGuide(true)}><span className="hb-reader-round" aria-hidden="true"><Icon name="info" /></span><span className="stack hb-reader-grow" style={{ gap: 2 }}><span className="hb-list__title">Статусы и как с ними работать</span><span className="small muted">Что значит каждая отметка и как её снять</span></span><Icon name="chevron" /></button> : null}
+          {guide ? <StatusGuideSheet onClose={() => setGuide(false)} hasBase isAdmin={hb.editorRole === 'admin'} /> : null}
+          {/* Создать, закрыть и вернуть справочник факультета — деканат и администратор справочника */}
+          {hb.person?.role === 'dean' || hb.editorRole === 'admin' ? <button type="button" className="hb-list__row" onClick={() => hb.nav.push({ name: 'hb-create' })}><span className="hb-reader-round" aria-hidden="true"><Icon name="books" /></span><span className="stack hb-reader-grow" style={{ gap: 2 }}><span className="hb-list__title">Справочники факультета</span><span className="small muted">Создать новый, закрыть или вернуть закрытый</span></span><Icon name="chevron" /></button> : null}
           <button type="button" className="hb-list__row" aria-expanded={previewSettings} aria-controls="profile-preview" onClick={() => setPreviewSettings(!previewSettings)}><span className="hb-reader-round" aria-hidden="true"><Icon name="book" /></span><span className="stack hb-reader-grow" style={{ gap: 2 }}><span className="hb-list__title">Предпросмотр студента</span><span className="small muted">Курс и общежитие, с которыми вы видите справочник</span></span><span className={`hb-list__toggle ${previewSettings ? 'hb-list__toggle--open' : ''}`}><Icon name="chevron-down" /></span></button>
         </div>
       </section> : null}
@@ -121,9 +126,7 @@ export function HandbookProfile() {
       {isTeam ? <p className="small muted">Параметры читателя для предпросмотра. Они не меняют вашу роль в команде.</p> : null}
       <div className="card hb-settings">
         <section className="hb-settings-group">
-          <label className="hb-field"><span className="hb-field__label">Направление или программа</span>
-            <ProgramInput value={value.program ?? ''} live={saveState === 'idle' || saveState === 'saved'} onSave={(program) => set({ program: program || null })} />
-          </label>
+          {/* Факультет студента уже известен по справочнику — направление вводить не нужно */}
           <CourseSlider value={value.course} onCommit={(course) => set({ course })} />
         </section>
         <section className="hb-settings-group">
@@ -168,46 +171,16 @@ export function HandbookProfile() {
           ))}
         </div>
       </div>
-      <div className="card hb-list">
+      {!isTeam || /-demo-/.test(data.handbook.slug) ? <div className="card hb-list">
         {!isTeam ? <button type="button" className="hb-list__row" onClick={() => hb.nav.push({ name: 'hb-ask' })}><span className="hb-reader-round" aria-hidden="true"><Icon name="chat" /></span><span className="hb-list__title hb-reader-grow">Мои вопросы</span><Icon name="chevron" /></button> : null}
-        <button type="button" className="hb-list__row" onClick={() => hb.nav.push({ name: 'hb-handbooks' })}><span className="hb-reader-round" aria-hidden="true"><Icon name="books" /></span><span className="hb-list__title hb-reader-grow">Сменить справочник</span><Icon name="chevron" /></button>
-      </div>
+        {/* Другие справочники — только в демо: в настоящем вузе студент и деканат работают со справочником своего факультета */}
+        {/-demo-/.test(data.handbook.slug) ? <button type="button" className="hb-list__row" onClick={() => hb.nav.push({ name: 'hb-handbooks' })}><span className="hb-reader-round" aria-hidden="true"><Icon name="books" /></span><span className="stack hb-reader-grow" style={{ gap: 2 }}><span className="hb-list__title">Другие справочники</span><span className="small muted">Только в демо: можно посмотреть другие справочники, но не работать с ними</span></span><Icon name="chevron" /></button> : null}
+      </div> : null}
 
     </>
   );
 }
 
-/**
- * Сохраняем программу после паузы, при потере фокуса и при уходе с экрана.
- * live — сохранений нет и они не сорвались: свежий ответ сервера можно показать в поле.
- */
-function ProgramInput({ value, live, onSave }: { value: string; live: boolean; onSave: (value: string) => void }) {
-  const ref = useRef<HTMLInputElement>(null);
-  const draft = useRef(value);
-  const saved = useRef(value);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const saveRef = useRef(onSave);
-  saveRef.current = onSave;
-  const flush = () => {
-    if (timer.current) clearTimeout(timer.current);
-    const next = draft.current.trim();
-    if (next !== saved.current) { saved.current = next; saveRef.current(next); }
-  };
-  useEffect(() => () => flush(), []);
-  // Экран открылся с кэшем, а сервер прислал другое: показываем свежее, если человек сейчас не печатает
-  useEffect(() => {
-    const input = ref.current;
-    if (!live || !input || value === saved.current || document.activeElement === input || draft.current.trim() !== saved.current) return;
-    input.value = value;
-    draft.current = value;
-    saved.current = value;
-  }, [value, live]);
-  return <input ref={ref} className="hb-input" defaultValue={value} maxLength={120} placeholder="Например, Информатика" onChange={(event) => {
-    draft.current = event.target.value;
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(flush, 600);
-  }} onBlur={flush} />;
-}
 
 const COURSE_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown']);
 

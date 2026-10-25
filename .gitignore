@@ -1,5 +1,5 @@
 # Зависимости и сборка
-node_modules/
+node_modules
 dist/
 *.tsbuildinfo
 .vite/

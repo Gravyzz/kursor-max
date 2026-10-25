@@ -39,6 +39,8 @@ x-server-env: &server-env
   DEV_AUTH: ${DEV_AUTH:-true}
   REVIEW_API_KEY: ${REVIEW_API_KEY:-}
   REVIEW_USER_ID: ${REVIEW_USER_ID:-9000000001}
+  # Команда Курсора (кабинет платформы, команда /platform). На офлайн-стенде пусто = тестовый пользователь 100500
+  PLATFORM_ADMIN_IDS: ${PLATFORM_ADMIN_IDS:-}
   APP_SECRET: ${APP_SECRET:-}
   APP_TIMEZONE: ${APP_TIMEZONE:-Europe/Moscow}
   DEMO_ENABLED: ${DEMO_ENABLED:-true}

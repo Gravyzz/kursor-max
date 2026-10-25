@@ -11,6 +11,8 @@ import { Icon } from '../../components/icons';
 import { AddBlockSheet, BLOCK_LABEL, BlockCard, blockProblem, cleanBlock, emptyBlock } from './BlockEditor';
 import { Blocks } from './Blocks';
 import { QrPosterSheet } from './QrPoster';
+import { FacultyScopeCard, ImpactCard, OverrideCard, OwnershipCard, PublishBaseSheet, listNames, type Impact, type OverrideInfo, type Ownership } from './SharedCards';
+import { AttentionCard, StatusGuideSheet, reviewDue, statusHelp, statusPill, type PageRating } from './StatusGuide';
 
 type Status = 'draft' | 'review' | 'published' | 'archived';
 
@@ -40,20 +42,21 @@ interface EditorPageData {
   role: 'admin' | 'editor';
   issues: string[];
   link: string;
-  handbook: { title: string; emoji: string };
+  handbook: { title: string; emoji: string; isBase?: boolean };
+  /** Ответственность за актуальность страницы. */
+  ownership?: Ownership;
+  /** Своя версия общей страницы университета. */
+  override?: OverrideInfo | null;
+  /** Оценки студентов: всего и после последней публикации, жалобы с комментариями. */
+  rating?: PageRating;
+  /** Общая база: для каких факультетов страница. */
+  faculties?: { selected: string[] | null; options: Array<{ id: string; name: string; shortName: string }> } | null;
   updatedAt?: string | null;
   returnNote?: string | null;
   returnedAt?: string | null;
 }
 
 type SaveState = 'saved' | 'dirty' | 'saving' | 'error' | 'conflict';
-
-const STATUS: Record<Status, { label: string; tone: 'ok' | 'warn' | 'neutral' }> = {
-  draft: { label: 'Черновик', tone: 'neutral' },
-  review: { label: 'На проверке', tone: 'warn' },
-  published: { label: 'Опубликована', tone: 'ok' },
-  archived: { label: 'В архиве', tone: 'neutral' },
-};
 
 /** Сервер принимает комментарий к проверке до 300 символов, причину возврата — до 500. */
 const REVIEW_NOTE_MAX = 300;
@@ -105,12 +108,19 @@ function payloadOf(values: FormValues) {
  * page_conflict — автосохранение останавливается и предлагает обновить страницу.
  * Недописанный блок сохранить можно, опубликовать — нет: что мешает, видно сразу у самого блока.
  */
-export function HandbookEditorPage({ id }: { id: string }) {
+export function HandbookEditorPage({ id, addBlock }: { id: string; addBlock?: BlockType }) {
   const hb = useHandbook();
   const { data, error, loading, reload } = useLoad(
     (signal) => api<EditorPageData>(hb.url(`/api/handbook-editor/pages/${id}`), { signal }),
     [id, hb.handbookId],
   );
+  // Общая страница университета: кто её использует — для карточки влияния и листа публикации
+  const isBase = Boolean(data?.handbook.isBase);
+  const impact = useLoad(
+    (signal) => (isBase ? api<Impact>(hb.url(`/api/handbook-editor/pages/${id}/impact`), { signal }) : Promise.resolve(null)),
+    [id, isBase],
+  );
+  const [publishAsk, setPublishAsk] = useState(false);
   const [title, setTitle] = useState('');
   const [summary, setSummary] = useState('');
   const [blocks, setBlocks] = useState<Block[]>([]);
@@ -126,6 +136,7 @@ export function HandbookEditorPage({ id }: { id: string }) {
   const [adding, setAdding] = useState(false);
   const [preview, setPreview] = useState(false);
   const [poster, setPoster] = useState(false);
+  const [guide, setGuide] = useState(false);
   const [archiveAsk, setArchiveAsk] = useState(false);
   const [reviewAsk, setReviewAsk] = useState(false);
   const [reviewNote, setReviewNote] = useState('');
@@ -165,6 +176,17 @@ export function HandbookEditorPage({ id }: { id: string }) {
     setSaveError(null);
     setActionError(null);
   }, [data]);
+
+  // «Новый срок» из списка сроков: страница открывается сразу с пустым блоком «Срок» — один раз за открытие
+  const added = useRef(false);
+  useEffect(() => {
+    if (!data || !addBlock || added.current) return;
+    added.current = true;
+    const block = emptyBlock(addBlock);
+    setFresh(block.id);
+    edit({ blocks: [...data.page.blocks, block] });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, addBlock]);
 
   /** Одно сохранение: отправляет то, что сейчас в форме, и запоминает, до какой правки сохранено. */
   const runSave = useCallback(async (): Promise<boolean> => {
@@ -328,16 +350,35 @@ export function HandbookEditorPage({ id }: { id: string }) {
     }
   };
 
-  const publish = async () => {
+  /** Общую страницу, которую уже видят факультеты, публикуем после листа «кого коснётся». */
+  const requestPublish = () => {
+    if (isBase && data?.page.publishedAt && impact.data?.faculties.length) setPublishAsk(true);
+    else void publish();
+  };
+
+  const publish = async (note?: string) => {
     setBusy('publish');
     try {
       if (!(await flush())) return notSaved();
-      await api(hb.url(`/api/handbook-editor/pages/${id}/publish`), {
+      // Комментарий к версии увидят администраторы факультетов в сообщении и в сравнении версий
+      if (note) {
+        const saved = await api<{ updatedAt?: string }>(hb.url(`/api/handbook-editor/pages/${id}`), {
+          method: 'PATCH',
+          body: { note, ...(baseUpdatedAt.current ? { baseUpdatedAt: baseUpdatedAt.current } : {}) },
+        });
+        if (saved.updatedAt) baseUpdatedAt.current = saved.updatedAt;
+      }
+      const result = await api<{ affected?: { faculties: number; overrides: number } }>(hb.url(`/api/handbook-editor/pages/${id}/publish`), {
         method: 'POST',
         body: baseUpdatedAt.current ? { baseUpdatedAt: baseUpdatedAt.current } : {},
       });
-      hb.toast('Опубликовано — студенты уже видят и находят поиском');
+      setPublishAsk(false);
+      const faculties = result.affected?.faculties ?? 0;
+      hb.toast(isBase && faculties
+        ? `Опубликовано — общая часть обновилась у ${faculties} ${faculties === 1 ? 'факультета' : 'факультетов'}${result.affected?.overrides ? '; факультетам со своей версией отправлено сообщение' : ''}`
+        : 'Опубликовано — студенты уже видят и находят поиском');
       reload();
+      impact.reload();
     } catch (err) {
       failed(err);
     } finally {
@@ -415,6 +456,9 @@ export function HandbookEditorPage({ id }: { id: string }) {
               ? 'Правки сохранены · студенты пока видят прежнюю версию'
               : 'Черновик сохранён';
 
+  const pill = statusPill(status, hasDraft || (status === 'published' && saveState !== 'saved' && !nothingNew));
+  // «Проверено, всё верно» может нажать администратор, ответственный или его замена — так же решает сервер
+  const canVerify = isAdmin || (Boolean(hb.person?.id) && (hb.person?.id === data.ownership?.ownerPersonId || hb.person?.id === data.ownership?.backupPersonId));
   const pageReturnNote = (data.page.returnNote ?? data.returnNote ?? '').trim();
   const returned = Boolean(pageReturnNote || data.page.returnedAt || data.returnedAt);
   // Заготовка нового справочника: в заметке — подсказка, что вписать, а не комментарий к проверке (APP-19)
@@ -429,9 +473,9 @@ export function HandbookEditorPage({ id }: { id: string }) {
       <div className="card hb-page__head hb-page-status">
         <h2 className="hb-block__title">Статус страницы</h2>
         <div className="row row--between">
-          <Pill tone={STATUS[status].tone}>{STATUS[status].label}</Pill>
+          <Pill tone={pill.tone}>{pill.label}</Pill>
           <div className="row" style={{ gap: 14 }}>
-            {status === 'published' ? (
+            {status === 'published' && !isBase ? (
               <button type="button" className="linkbtn" onClick={() => setPoster(true)}>
                 QR-плакат
               </button>
@@ -449,18 +493,24 @@ export function HandbookEditorPage({ id }: { id: string }) {
             {template ? 'Что вписать' : 'Комментарий к проверке'}: {data.page.note}
           </span>
         ) : null}
-        <span className="small muted">{status === 'archived'
-          ? 'Страница скрыта от студентов. Администратор может восстановить черновик или опубликовать её.'
-          : status === 'review' ? 'Страница ожидает проверки. Публикация доступна администратору.'
-            : status === 'published' ? 'Студенты видят опубликованную версию. Новые правки можно отправить на проверку.'
-              : 'Черновик виден только команде. Заполните страницу и отправьте на проверку или опубликуйте.'}</span>
-        {isAdmin && status !== 'review' && status !== 'archived' ? <>
+        <span className="small muted">{statusHelp({ status, hasDraft: hasDraft || saveState !== 'saved', isAdmin, wasPublished: Boolean(data.page.publishedAt), isBase })}</span>
+        <button type="button" className="linkbtn small" style={{ justifySelf: 'start' }} onClick={() => setGuide(true)}>Что значат статусы и как их снять</button>
+        {/* Администратор может попросить коллегу проверить правки; без новых правок кнопка только мешает */}
+        {isAdmin && status !== 'review' && status !== 'archived' && !nothingNew ? <>
           <Button variant="secondary" size="medium" disabled={!canPublish || busy !== null} onClick={() => setReviewAsk(true)}>На проверку</Button>
           {/* Неактивная кнопка всегда объясняет почему */}
           {!canPublish ? <span className="small muted hb-disabled-why">{nothingNew ? 'Нет новых правок — отправлять пока нечего.' : saveState === 'conflict' ? 'Сначала обновите страницу: её изменил кто-то ещё.' : hint ? `Сначала: ${hint}` : null}</span> : null}
         </> : null}
         {isAdmin && status === 'archived' ? <Button variant="secondary" size="medium" disabled={busy !== null || saveState === 'conflict'} onClick={restoreDraft}>Восстановить черновик</Button> : null}
       </div>
+
+      <AttentionCard rating={data.rating} due={reviewDue({ status, checkedAt: data.page.checkedAt, reviewAt: data.page.reviewAt })} reviewAt={data.page.reviewAt}
+        isAdmin={isAdmin} canVerify={canVerify} ownerName={data.ownership?.ownerName ?? null} isBase={isBase} />
+
+      {data.override ? <OverrideCard pageId={id} override={data.override} isAdmin={isAdmin} onChanged={reload} /> : null}
+      {isBase && data.faculties ? <FacultyScopeCard key={(data.faculties.selected ?? ['all']).join()} pageId={id} scope={data.faculties} isAdmin={isAdmin} onChanged={() => { reload(); impact.reload(); }} /> : null}
+      {isBase ? <ImpactCard impact={impact.data ?? null} /> : null}
+      {data.ownership ? <OwnershipCard pageId={id} ownership={data.ownership} isAdmin={isAdmin} published={status === 'published'} onChanged={reload} /> : null}
 
       {returned && status !== 'review' ? (
         <div className="hb-alert hb-alert--warn" role="note">
@@ -558,6 +608,7 @@ export function HandbookEditorPage({ id }: { id: string }) {
             total={blocks.length}
             defaultOpen={block.id === fresh}
             problem={localProblems.get(index) ?? serverProblems.get(index) ?? null}
+            note={impact.data?.anchors.includes(block.id) ? 'После этого блока стоят уточнения факультетов' : null}
             onChange={(next) => edit({ blocks: blocks.map((value) => (value.id === next.id ? next : value)) })}
             onRemove={() => edit({ blocks: blocks.filter((value) => value.id !== block.id) })}
             onMove={(direction) => move(index, direction)}
@@ -621,7 +672,7 @@ export function HandbookEditorPage({ id }: { id: string }) {
             ) : null}
           </span>
           {isAdmin ? (
-            <Button variant="primary" size="large" loading={busy === 'publish'} disabled={!canPublish || busy !== null} onClick={publish}>
+            <Button variant="primary" size="large" loading={busy === 'publish'} disabled={!canPublish || busy !== null} onClick={requestPublish}>
               {status === 'published' ? 'Опубликовать правки' : 'Опубликовать'}
             </Button>
           ) : (
@@ -637,6 +688,10 @@ export function HandbookEditorPage({ id }: { id: string }) {
           )}
         </div>
       </BottomBar>
+
+      {publishAsk && impact.data ? (
+        <PublishBaseSheet impact={impact.data} busy={busy === 'publish'} onPublish={(note) => void publish(note)} onClose={() => setPublishAsk(false)} />
+      ) : null}
 
       {adding ? (
         <AddBlockSheet
@@ -711,6 +766,8 @@ export function HandbookEditorPage({ id }: { id: string }) {
         </Sheet>
       ) : null}
 
+      {guide ? <StatusGuideSheet onClose={() => setGuide(false)} isBase={isBase} hasBase={Boolean(data.override)} isAdmin={isAdmin} /> : null}
+
       {poster ? (
         <QrPosterSheet
           title={data.page.publishedTitle}
@@ -726,6 +783,11 @@ export function HandbookEditorPage({ id }: { id: string }) {
             Студенты перестанут видеть страницу, она пропадёт из поиска, напоминания о её сроках отключатся. Черновик и история останутся у
             редакторов.
           </span>
+          {isBase && impact.data?.faculties.length ? (
+            <span className="small hb-attention">
+              Страницу показывают {listNames(impact.data.faculties.map((f) => f.shortName))}. Уточнения факультетов скроются вместе с ней, своих версий это не коснётся.
+            </span>
+          ) : null}
           <Button variant="destructive" size="large" loading={busy === 'archive'} onClick={archive}>
             Убрать в архив
           </Button>

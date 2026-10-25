@@ -21,9 +21,13 @@ export interface Me {
   /** Роль в демо-песочнице; null — демо не открывали. */
   demo: { role: DemoRole } | null;
   handbook: HandbookRef | null;
+  /** Университет, которым пользователь управляет: кабинет университета. */
+  university: { id: string; name: string; shortName: string } | null;
+  /** Команда Курсора: кабинет платформы. */
+  platform?: boolean;
 }
 
-export type DemoRole = 'student' | 'editor' | 'dean';
+export type DemoRole = 'student' | 'editor' | 'dean' | 'university';
 
 // ─── Справочник факультета ───
 
@@ -51,7 +55,8 @@ export type Block =
   | (BlockBase & { type: 'place'; title: string; address?: string; howTo?: string; mapLink?: string })
   | (BlockBase & { type: 'deadline'; title: string; startsOn: string; endsOn?: string; remindDays?: number[] })
   | (BlockBase & { type: 'link'; title: string; url: string; note?: string })
-  | (BlockBase & { type: 'file'; title: string; url: string; note?: string })
+  /** Файл загружен в приложение (fileId); url — у старых блоков, где файл был ссылкой. */
+  | (BlockBase & { type: 'file'; title: string; fileId?: string; fileName?: string; fileSize?: number; url?: string; note?: string })
   | (BlockBase & { type: 'alert'; tone: 'info' | 'warn'; text: string; endsOn?: string })
   | (BlockBase & { type: 'chat'; title: string; url: string; note?: string })
   | (BlockBase & { type: 'glossary'; items: Array<{ id: string; term: string; meaning: string }> });
@@ -70,6 +75,8 @@ export interface HandbookSectionPage {
   summary: string | null;
   snippet: string;
   inherited: boolean;
+  /** Общая страница с уточнением факультета. */
+  local?: boolean;
 }
 
 export interface HandbookSection {
@@ -139,6 +146,10 @@ export interface HandbookPageView {
     updatedAt: string;
     checkedAt: string | null;
     inherited: boolean;
+    /** Откуда текст: общая инструкция университета, страница факультета или общая с уточнением. */
+    source?: 'university' | 'faculty' | 'university+local';
+    /** Подпись уточнения: «ИИТ». */
+    localLabel?: string | null;
     helpful: number;
     notHelpful: number;
   };
@@ -185,6 +196,14 @@ export interface HandbookMember {
   personId: string;
   fullName: string;
   role: 'admin' | 'editor';
+  /** Подпись по старшинству: «Деканат», «Администратор факультета», «Администратор», «Редактор». */
+  title?: string;
+  /** Студсовет или сотрудник; у руководства — null. */
+  kind?: string | null;
+  /** 3 — руководство, 2 — администратор, 1 — редактор. */
+  rank?: number;
+  /** Можно ли менять роль и убрать из команды: только тех, кто младше. */
+  canManage?: boolean;
   connected: boolean;
   you: boolean;
   link: string | null;

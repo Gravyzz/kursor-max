@@ -115,13 +115,14 @@ export function HandbookPage({ id }: { id: string }) {
         <div className="hb-page-meta">
           <button type="button" className="linkbtn small" onClick={() => hb.nav.push({ name: 'hb-section', slug: page.section.slug })}>{page.section.title}</button>
           {hb.editorRole ? <span className="hb-meta-preview" title="Предпросмотр со стороны студента" aria-label="Предпросмотр со стороны студента"><Icon name="book" size={16} /></span> : null}
-          <span className="hb-reader-verified small"><Icon name="done" size={16} />Проверено {dateOnly(String(page.checkedAt ?? page.updatedAt).slice(0, 10))}{page.inherited ? ' · университет' : ''}</span>
+          <span className="hb-reader-verified small"><Icon name="done" size={16} />Проверено {dateOnly(String(page.checkedAt ?? page.updatedAt).slice(0, 10))}{page.inherited ? ' · общая инструкция университета' : ''}</span>
         </div>
       </div>
 
       <article className="card hb-reading-sheet">
       <Blocks
         blocks={page.blocks}
+        localLabel={page.localLabel ?? null}
         today={data.today}
         done={done}
         onToggle={toggle}

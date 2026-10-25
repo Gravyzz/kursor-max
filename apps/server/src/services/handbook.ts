@@ -49,6 +49,13 @@ const HANDBOOK_SELECT = `
     FROM handbooks h WHERE h.status = 'active'`;
 
 /**
+ * Справочник, который открывает читатель: только справочник факультета.
+ * Общая база университета — внутренний слой: студент видит её страницы внутри своего справочника,
+ * а не как отдельный справочник (D3).
+ */
+const READER_SELECT = `${HANDBOOK_SELECT} AND h.institute_id IS NOT NULL`;
+
+/**
  * Каталог справочников. Демо-песочницы видны только своему владельцу:
  * у каждого аккаунта свой «Модельный университет», и чужие в каталог не попадают.
  */
@@ -68,10 +75,16 @@ export async function listHandbooks(db: Db, userId: number, universityId?: strin
   );
 }
 
-export async function findHandbook(db: Db, ref: { id?: string | null; slug?: string | null }): Promise<HandbookRow | undefined> {
-  if (ref.id) return one<HandbookRow>(db, `${HANDBOOK_SELECT} AND h.id = $1`, [ref.id]);
-  if (ref.slug) return one<HandbookRow>(db, `${HANDBOOK_SELECT} AND h.slug = $1 ORDER BY h.created_at LIMIT 1`, [ref.slug]);
+export async function findHandbook(db: Db, ref: { id?: string | null; slug?: string | null }, options: { reader?: boolean } = {}): Promise<HandbookRow | undefined> {
+  const select = options.reader ? READER_SELECT : HANDBOOK_SELECT;
+  if (ref.id) return one<HandbookRow>(db, `${select} AND h.id = $1`, [ref.id]);
+  if (ref.slug) return one<HandbookRow>(db, `${select} AND h.slug = $1 ORDER BY h.created_at LIMIT 1`, [ref.slug]);
   return undefined;
+}
+
+/** Общая база университета (справочник без института) или undefined, если её ещё нет. */
+export async function baseHandbook(db: Db, universityId: string): Promise<HandbookRow | undefined> {
+  return one<HandbookRow>(db, `${HANDBOOK_SELECT} AND h.university_id = $1 AND h.institute_id IS NULL ORDER BY h.created_at LIMIT 1`, [universityId]);
 }
 
 /** Цепочка наследования: справочник факультета и общеуниверситетский над ним. */
@@ -123,30 +136,36 @@ export async function ensureReader(db: Db, handbook: HandbookRow, user: UserRow)
 
 /**
  * Какой справочник открыть по параметру запуска мини-приложения:
- * hb_<слаг справочника>, hbp_<id страницы>, hbe_<id страницы в редакторе>.
+ * hb_<слаг справочника>, hbp_<id страницы>, hbe_<id страницы в редакторе>, hbs_<id уточнения факультета>.
  */
-export function startRef(start: string | null | undefined): { slug: string | null; pageId: string | null } {
+export function startRef(start: string | null | undefined): { slug: string | null; pageId: string | null; supplementId: string | null } {
   const value = start ?? '';
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const page = value.startsWith('hbp_') ? value.slice(4) : value.startsWith('hbe_') ? value.slice(4) : null;
+  const supplement = value.startsWith('hbs_') ? value.slice(4) : null;
   return {
     slug: value.startsWith('hb_') && value !== 'hb_edit' ? value.slice(3) : null,
     pageId: page && uuid.test(page) ? page : null,
+    supplementId: supplement && uuid.test(supplement) ? supplement : null,
   };
 }
 
 /** Справочник для пользователя: по ссылке, по прошлому визиту или по институту его записи в вузе. */
 export async function contextFor(
   user: UserRow,
-  ref: { handbookId?: string | null; slug?: string | null; pageId?: string | null } = {},
+  ref: { handbookId?: string | null; slug?: string | null; pageId?: string | null; supplementId?: string | null } = {},
 ): Promise<HandbookContext | null> {
-  let handbook = await findHandbook(pool, { id: ref.handbookId ?? null, slug: ref.slug ?? null });
+  let handbook = await findHandbook(pool, { id: ref.handbookId ?? null, slug: ref.slug ?? null }, { reader: true });
+  // Уточнение факультета (из сообщения «ждёт публикации») открывается в справочнике этого факультета
+  if (!handbook && ref.supplementId) {
+    handbook = await one<HandbookRow>(pool, `${READER_SELECT} AND h.id = (SELECT handbook_id FROM page_supplements WHERE id = $1)`, [ref.supplementId]);
+  }
   if (!handbook && ref.pageId) {
     // Ссылка на страницу вуза из справочника факультета не должна «переселять» студента в справочник вуза:
     // сначала ищем справочник, который читатель уже открывал и в цепочке которого есть эта страница
     handbook = await one<HandbookRow>(
       pool,
-      `${HANDBOOK_SELECT} AND h.id = (
+      `${READER_SELECT} AND h.id = (
          SELECT r.handbook_id FROM handbook_readers r
            JOIN handbooks rh ON rh.id = r.handbook_id
            JOIN pages pg ON pg.id = $2 AND (pg.handbook_id = rh.id OR pg.handbook_id = rh.parent_id)
@@ -154,19 +173,20 @@ export async function contextFor(
           ORDER BY (pg.handbook_id = rh.id) DESC, r.last_seen_at DESC LIMIT 1)`,
       [user.id, ref.pageId],
     );
-    handbook ??= await one<HandbookRow>(pool, `${HANDBOOK_SELECT} AND h.id = (SELECT handbook_id FROM pages WHERE id = $1)`, [ref.pageId]);
+    handbook ??= await one<HandbookRow>(pool, `${READER_SELECT} AND h.id = (SELECT handbook_id FROM pages WHERE id = $1)`, [ref.pageId]);
   }
   if (!handbook) {
     handbook = await one<HandbookRow>(
       pool,
-      `${HANDBOOK_SELECT} AND h.id = (SELECT r.handbook_id FROM handbook_readers r WHERE r.user_id = $1 ORDER BY r.last_seen_at DESC LIMIT 1)`,
+      `${READER_SELECT} AND h.id = (SELECT r.handbook_id FROM handbook_readers r JOIN handbooks rh ON rh.id = r.handbook_id AND rh.institute_id IS NOT NULL
+                                     WHERE r.user_id = $1 ORDER BY r.last_seen_at DESC LIMIT 1)`,
       [user.id],
     );
   }
   if (!handbook) {
     handbook = await one<HandbookRow>(
       pool,
-      `${HANDBOOK_SELECT} AND h.institute_id = (
+      `${READER_SELECT} AND h.institute_id = (
          SELECT p.institute_id FROM persons p WHERE p.user_id = $1 AND p.institute_id IS NOT NULL ORDER BY p.created_at LIMIT 1)
        ORDER BY h.created_at LIMIT 1`,
       [user.id],
@@ -230,15 +250,23 @@ interface PageRow {
   not_helpful: number;
   inherited_from: string | null;
   own: boolean;
+  /** Опубликованное уточнение факультета к общей странице (только для страниц базы). */
+  sup_blocks: Block[] | null;
+  sup_anchor: string | null;
+  sup_text: string;
 }
 
 const PAGE_SELECT = `
   SELECT p.id, p.handbook_id, p.section_id, s.slug AS section_slug, s.title AS section_title, s.emoji AS section_emoji,
          s.position AS section_position, s.audience AS section_audience, p.slug, p.title, p.summary, p.audience, p.position,
          p.blocks, p.updated_at, p.checked_at, p.helpful, p.not_helpful, p.inherited_from,
-         (p.handbook_id = $1) AS own
+         (p.handbook_id = $1) AS own, sup.blocks AS sup_blocks, sup.anchor_block_id AS sup_anchor, COALESCE(sup.search_text, '') AS sup_text
     FROM pages p JOIN sections s ON s.id = p.section_id
+    -- уточнение факультета к общей странице: общая часть не копируется, блоки факультета встают рядом
+    LEFT JOIN page_supplements sup ON sup.base_page_id = p.id AND sup.handbook_id = $1 AND sup.status = 'published' AND p.handbook_id <> $1
    WHERE p.handbook_id = ANY($2::uuid[]) AND p.status = 'published' AND s.visible
+     -- общая страница «только для выбранных факультетов» видна лишь им
+     AND page_for_handbook(p.institute_ids, $1)
      -- страница вуза, которую факультет переписал, не показывается ни в списках, ни в поиске
      AND NOT EXISTS (
        SELECT 1 FROM pages ov
@@ -248,23 +276,58 @@ const PAGE_SELECT = `
  * Убирает перекрытые страницы: если факультет завёл свою версию страницы вуза,
  * студент должен увидеть одну — факультетскую. Строки должны идти «свои впереди».
  */
-function applyInheritance<T extends Pick<PageRow, 'id' | 'section_slug' | 'slug' | 'inherited_from'>>(rows: T[]): T[] {
+function applyInheritance<T extends Pick<PageRow, 'id' | 'section_slug' | 'slug' | 'inherited_from' | 'own'>>(rows: T[]): T[] {
   const overridden = new Set(rows.filter((row) => row.inherited_from).map((row) => row.inherited_from!));
+  // Страховка от двух страниц с одним адресом: побеждает страница факультета, в каком бы порядке ни пришли строки.
+  // Раньше поиск шёл по рангу, и в нём побеждала общая страница, которую список уже скрыл (D1)
+  const ownKeys = new Set(rows.filter((row) => row.own).map((row) => `${row.section_slug}/${row.slug}`));
   const seen = new Set<string>();
   const result: T[] = [];
   for (const row of rows) {
     const key = `${row.section_slug}/${row.slug}`;
-    if (seen.has(key) || overridden.has(row.id)) continue;
+    if (seen.has(key) || overridden.has(row.id) || (!row.own && ownKeys.has(key))) continue;
     seen.add(key);
     result.push(row);
   }
   return result;
 }
 
+/** Идентификатор блока уточнения в собранной странице: свой у каждого факультета, не пересекается с блоками общей. */
+export function localBlockId(handbookId: string, id: string): string {
+  return `l${handbookId.replace(/-/g, '').slice(0, 8)}-${id}`;
+}
+
+/**
+ * Блоки уточнения с идентификаторами факультета: отметки чек-листа и сроки уточнения
+ * не смешиваются ни с общей страницей, ни с уточнениями других факультетов.
+ */
+export function localizeBlocks(handbookId: string, blocks: Block[]): Block[] {
+  return blocks.map((block) => {
+    const next = { ...block, id: localBlockId(handbookId, block.id), origin: 'local' } as Block & { origin: 'local' };
+    if ('items' in next && Array.isArray(next.items)) {
+      (next as { items: Array<{ id: string }> }).items = next.items.map((item: { id: string }) => ({ ...item, id: localBlockId(handbookId, item.id) }));
+    }
+    return next;
+  });
+}
+
+/** Общая страница + уточнение факультета: блоки встают после блока-якоря, без якоря — в конец. */
+export function mergeSupplement(blocks: Block[], local: Block[], anchor: string | null): Block[] {
+  if (!local.length) return blocks;
+  const at = anchor ? blocks.findIndex((block) => block.id === anchor) : -1;
+  if (at < 0) return [...blocks, ...local];
+  return [...blocks.slice(0, at + 1), ...local, ...blocks.slice(at + 1)];
+}
+
+function withSupplement<T extends PageRow>(row: T, handbookId: string): T {
+  if (!row.sup_blocks || row.own) return row;
+  return { ...row, blocks: mergeSupplement(row.blocks, localizeBlocks(handbookId, row.sup_blocks), row.sup_anchor) };
+}
+
 /** Страницы с учётом наследования: страница факультета перекрывает общеуниверситетскую с тем же slug. */
 async function effectivePages(db: Db, ctx: HandbookContext): Promise<PageRow[]> {
   const rows = await many<PageRow>(db, `${PAGE_SELECT} ORDER BY own DESC, s.position, p.position, p.title`, [ctx.handbook.id, ctx.chain]);
-  return applyInheritance(rows);
+  return applyInheritance(rows).map((row) => withSupplement(row, ctx.handbook.id));
 }
 
 function matchesReader(row: PageRow, profile: ReaderProfile): boolean {
@@ -273,7 +336,7 @@ function matchesReader(row: PageRow, profile: ReaderProfile): boolean {
 
 export async function sectionsWithPages(db: Db, ctx: HandbookContext) {
   const pages = (await effectivePages(db, ctx)).filter((row) => matchesReader(row, ctx.profile));
-  const sections = new Map<string, { slug: string; title: string; emoji: string; position: number; pages: Array<{ id: string; slug: string; title: string; summary: string | null; snippet: string; inherited: boolean }> }>();
+  const sections = new Map<string, { slug: string; title: string; emoji: string; position: number; pages: Array<{ id: string; slug: string; title: string; summary: string | null; snippet: string; inherited: boolean; local: boolean }> }>();
   for (const page of pages) {
     const section = sections.get(page.section_slug) ?? {
       slug: page.section_slug,
@@ -289,6 +352,7 @@ export async function sectionsWithPages(db: Db, ctx: HandbookContext) {
       summary: page.summary,
       snippet: pageSnippet(page.summary, visibleBlocks(page.blocks, ctx.profile, ctx.today), 110),
       inherited: !page.own,
+      local: Boolean(page.sup_blocks),
     });
     sections.set(page.section_slug, section);
   }
@@ -314,6 +378,9 @@ export async function getPage(db: Db, ctx: HandbookContext, pageId: string) {
   const feedback = await one<{ helpful: boolean }>(db, 'SELECT helpful FROM page_feedback WHERE page_id = $1 AND reader_id = $2', [page.id, ctx.reader.id]);
   await db.query('UPDATE pages SET views = views + 1 WHERE id = $1', [page.id]);
   const identity = await getBotIdentity();
+  const institute = !page.own && page.sup_blocks && ctx.handbook.institute_id
+    ? await one<{ short_name: string }>(db, 'SELECT short_name FROM institutes WHERE id = $1', [ctx.handbook.institute_id])
+    : undefined;
   const siblings = pages
     .filter((row) => row.section_slug === page.section_slug && row.id !== page.id && matchesReader(row, ctx.profile))
     .slice(0, 6)
@@ -329,6 +396,10 @@ export async function getPage(db: Db, ctx: HandbookContext, pageId: string) {
       updatedAt: page.updated_at,
       checkedAt: page.checked_at,
       inherited: !page.own,
+      /** Откуда текст: общая инструкция, страница факультета или общая с уточнением факультета. */
+      source: page.own ? 'faculty' : page.sup_blocks ? 'university+local' : 'university',
+      /** Подпись уточнения у студента: «В ИИТ». */
+      localLabel: institute?.short_name ?? null,
       helpful: page.helpful,
       notHelpful: page.not_helpful,
     },
@@ -413,10 +484,12 @@ export async function search(db: Db, ctx: HandbookContext, rawQuery: string, lim
   const rows = await many<PageRow & { score: number }>(
     db,
     `${PAGE_SELECT}
-       AND p.search_vector @@ websearch_to_tsquery('russian', $3)
+       AND (p.search_vector @@ websearch_to_tsquery('russian', $3) OR sup.search_vector @@ websearch_to_tsquery('russian', $3))
        AND audience_matches(p.audience, $4::int, $5::boolean, $6::text[])
        AND audience_matches(s.audience, $4::int, $5::boolean, $6::text[])
-     ORDER BY ts_rank(p.search_vector, websearch_to_tsquery('russian', $3)) * (CASE WHEN p.handbook_id = $1 THEN 1.2 ELSE 1 END) DESC,
+     -- уточнение факультета весит как своя страница: «каб. 214» находит общую справку только у студентов ИИТ
+     ORDER BY GREATEST(ts_rank(p.search_vector, websearch_to_tsquery('russian', $3)) * (CASE WHEN p.handbook_id = $1 THEN 1.2 ELSE 1 END),
+                       COALESCE(ts_rank(sup.search_vector, websearch_to_tsquery('russian', $3)), 0) * 1.2) DESC,
               own DESC, p.views DESC
      LIMIT $7`,
     params,
@@ -432,10 +505,11 @@ export async function search(db: Db, ctx: HandbookContext, rawQuery: string, lim
       found = await many<PageRow & { score: number }>(
         db,
         `${PAGE_SELECT}
-           AND p.search_vector @@ to_tsquery('russian', $3)
+           AND (p.search_vector @@ to_tsquery('russian', $3) OR sup.search_vector @@ to_tsquery('russian', $3))
            AND audience_matches(p.audience, $4::int, $5::boolean, $6::text[])
            AND audience_matches(s.audience, $4::int, $5::boolean, $6::text[])
-         ORDER BY ts_rank(p.search_vector, to_tsquery('russian', $3)) * (CASE WHEN p.handbook_id = $1 THEN 1.2 ELSE 1 END) DESC,
+         ORDER BY GREATEST(ts_rank(p.search_vector, to_tsquery('russian', $3)) * (CASE WHEN p.handbook_id = $1 THEN 1.2 ELSE 1 END),
+                           COALESCE(ts_rank(sup.search_vector, to_tsquery('russian', $3)), 0) * 1.2) DESC,
                   own DESC, p.views DESC
          LIMIT $7`,
         [ctx.handbook.id, ctx.chain, anyWord, ctx.profile.course, ctx.profile.dorm, ctx.profile.tags, limit * 2 + 4],
@@ -454,7 +528,7 @@ export async function search(db: Db, ctx: HandbookContext, rawQuery: string, lim
            AND audience_matches(s.audience, $4::int, $5::boolean, $6::text[])
        ) p
        CROSS JOIN LATERAL (
-         SELECT GREATEST(word_similarity($3, pg.search_title) * 1.15, word_similarity($3, pg.search_text)) AS score
+         SELECT GREATEST(word_similarity($3, pg.search_title) * 1.15, word_similarity($3, pg.search_text), word_similarity($3, p.sup_text)) AS score
            FROM pages pg WHERE pg.id = p.id
        ) sim
        WHERE sim.score >= 0.55
@@ -464,7 +538,7 @@ export async function search(db: Db, ctx: HandbookContext, rawQuery: string, lim
     );
   }
   // Страница факультета перекрывает общеуниверситетскую: в выдаче она должна быть одна
-  const deduped = applyInheritance(found).slice(0, limit);
+  const deduped = applyInheritance(found).slice(0, limit).map((row) => withSupplement(row, ctx.handbook.id));
   return deduped.map((row, index) => ({
     pageId: row.id,
     slug: row.slug,
@@ -529,6 +603,7 @@ export async function upcomingDeadlines(db: Db, ctx: HandbookContext, days = 45)
         AND audience_matches(d.audience, $4::int, $5::boolean, $6::text[])
         AND audience_matches(p.audience, $4::int, $5::boolean, $6::text[])
         AND audience_matches(s.audience, $4::int, $5::boolean, $6::text[])
+        AND page_for_handbook(p.institute_ids, $7)
         -- срок со страницы вуза, которую факультет переписал, берём из версии факультета
         AND NOT EXISTS (
           SELECT 1 FROM pages ov WHERE ov.handbook_id = $7 AND ov.inherited_from = d.page_id AND ov.status = 'published')
@@ -683,6 +758,10 @@ export async function askQuestion(db: Db, ctx: HandbookContext, rawText: string,
   const query = stripNul(rawQuery);
   const trimmed = text.trim().slice(0, 1000);
   if (trimmed.length < 5) throw new AppError('question_short', 'Опишите вопрос подробнее — так дежурному будет понятнее', 400);
+  // Вопросы дежурному задают студенты. Команда справочника отвечает на них, а не задаёт себе же
+  if (await isStaffOf(db, ctx.handbook, ctx.reader.user_id)) {
+    throw new AppError('team_question', 'Вопросы дежурному задают студенты. Вы в команде справочника — отвечайте на вопросы во вкладке «Вопросы»', 403);
+  }
   return tx(async (client) => {
     // Двойное нажатие не должно создать два вопроса: проверки и вставка — под блокировкой читателя
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`hbq:${ctx.reader.id}`]);
@@ -800,7 +879,22 @@ export async function membership(db: Db, handbookId: string, user: UserRow): Pro
     [handbookId, user.id],
   );
   if (row) return row;
-  // Сотрудник деканата этого института — администратор справочника по умолчанию
+  // Назначения университета: администратор университета ведёт общую базу,
+  // администратор факультета — справочники своего института. Справочники факультетов
+  // администратор университета только смотрит: править их он может, назначив себя явно.
+  const granted = await one<{ personId: string }>(
+    db,
+    `SELECT r.person_id AS "personId" FROM org_roles r
+       JOIN persons p ON p.id = r.person_id
+       JOIN handbooks h ON h.id = $1 AND h.university_id = r.university_id
+      WHERE p.user_id = $2 AND r.revoked_at IS NULL AND p.university_id = h.university_id
+        AND ((r.role = 'university_admin' AND h.institute_id IS NULL)
+          OR (r.role = 'faculty_admin' AND r.institute_id = h.institute_id))
+      LIMIT 1`,
+    [handbookId, user.id],
+  );
+  if (granted) return { role: 'admin', personId: granted.personId };
+  // Сотрудник деканата этого института — администратор справочника по должности (до перехода на назначения)
   const dean = await one<{ personId: string }>(
     db,
     `SELECT p.id AS "personId" FROM persons p JOIN handbooks h ON h.institute_id = p.institute_id
@@ -809,6 +903,18 @@ export async function membership(db: Db, handbookId: string, user: UserRow): Pro
     [handbookId, user.id],
   );
   return dean ? { role: 'admin', personId: dean.personId } : null;
+}
+
+/** Команда справочника или администрация вуза: деканат, редакторы, администратор факультета или университета. */
+export async function isStaffOf(db: Db, handbook: Pick<HandbookRow, 'id' | 'university_id'>, userId: number): Promise<boolean> {
+  if (await membership(db, handbook.id, { id: userId } as UserRow)) return true;
+  const uni = await one(
+    db,
+    `SELECT 1 FROM org_roles r JOIN persons p ON p.id = r.person_id
+      WHERE p.user_id = $1 AND r.university_id = $2 AND r.role = 'university_admin' AND r.revoked_at IS NULL LIMIT 1`,
+    [userId, handbook.university_id],
+  );
+  return Boolean(uni);
 }
 
 /** Роль пользователя в справочнике: читатель, редактор раздела или администратор. */

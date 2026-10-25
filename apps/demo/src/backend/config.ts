@@ -29,6 +29,8 @@ export const config = {
   APP_SECRET: 'browser-demo-secret-not-for-production',
   APP_TIMEZONE: 'Europe/Moscow',
   DEMO_ENABLED: true,
+  // Кабинета платформы в браузерном демо нет: вузы подключает команда Курсора на сервере
+  PLATFORM_ADMIN_IDS: '',
   NOTIFY_RPS: 30,
   WORKER_TICK_MS: 1200,
 };

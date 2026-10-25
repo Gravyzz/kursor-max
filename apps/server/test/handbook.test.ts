@@ -172,12 +172,17 @@ describe('справочник факультета', { skip: !DB_URL && 'TEST_D
     }
   });
 
-  it('наследование: страница факультета перекрывает страницу вуза', async () => {
+  it('наследование: общая страница с уточнением факультета — одна страница', async () => {
     const sections = await m.handbook.sectionsWithPages(m.pool, ctx);
     const docs = sections.find((s) => s.slug === 'spravki-i-dokumenty')!;
     const spravki = docs.pages.filter((p) => p.slug === 'spravka-ob-obuchenii');
     assert.equal(spravki.length, 1, 'страница должна быть одна, а не две');
-    assert.match(spravki[0]!.summary ?? '', /ИИТ/, 'должна победить версия факультета');
+    assert.ok(spravki[0]!.inherited && spravki[0]!.local, 'общая страница с уточнением ИИТ');
+    const opened = await m.handbook.getPage(m.pool, ctx, spravki[0]!.id);
+    assert.equal(opened.page.source, 'university+local');
+    assert.equal(opened.page.localLabel, 'ИИТ');
+    const steps = opened.page.blocks.findIndex((block) => block.id === 'u2');
+    assert.match(JSON.stringify(opened.page.blocks[steps + 1]), /каб\. 214/, 'уточнение стоит после шагов общей страницы');
     // Страница вуза без переопределения наследуется как есть
     assert.ok(docs.pages.some((p) => p.slug === 'spravka-v-voenkomat'), 'страница вуза должна наследоваться');
   });
@@ -222,11 +227,11 @@ describe('справочник факультета', { skip: !DB_URL && 'TEST_D
     const bumazhka = await m.handbook.search(m.pool, fresh, 'бумажка об обучении');
     assert.ok(bumazhka.some((hit) => hit.slug === 'spravka-ob-obuchenii'), 'бумажка → справка');
 
-    // Перекрытая страница вуза не должна дублировать факультетскую в выдаче
+    // Общая страница с уточнением — одна строка выдачи; текст уточнения тоже находит её
     const spravki = await m.handbook.search(m.pool, fresh, 'справка об обучении');
-    const overridden = spravki.filter((hit) => hit.slug === 'spravka-ob-obuchenii');
-    assert.equal(overridden.length, 1, 'в поиске страница должна быть одна');
-    assert.match(overridden[0]!.snippet, /ИИТ/, 'и это должна быть версия факультета');
+    assert.equal(spravki.filter((hit) => hit.slug === 'spravka-ob-obuchenii').length, 1, 'в поиске страница должна быть одна');
+    const room = await m.handbook.search(m.pool, fresh, 'где забрать справку корпус 2');
+    assert.ok(room.some((hit) => hit.slug === 'spravka-ob-obuchenii'), 'уточнение ИИТ находит общую справку');
 
     const typo = await m.handbook.search(m.pool, fresh, 'стипендея');
     assert.ok(Array.isArray(typo), 'опечатка не должна ломать поиск');
@@ -337,7 +342,11 @@ describe('справочник факультета', { skip: !DB_URL && 'TEST_D
   });
 
   it('вопрос дежурному: ответ доходит до читателя и попадает в FAQ', async () => {
-    const fresh = (await m.handbook.contextFor(user, { handbookId: ids.handbookId }))!;
+    // Вопросы задают студенты: деканат (user) отвечает, спрашивает отдельный читатель
+    const asker = await m.identity.upsertUser(m.pool, { id: 919191, first_name: 'Студент' });
+    const fresh = (await m.handbook.contextFor(asker, { handbookId: ids.handbookId }))!;
+    const deanCtx = (await m.handbook.contextFor(user, { handbookId: ids.handbookId }))!;
+    await assert.rejects(() => m.handbook.askQuestion(m.pool, deanCtx, 'Вопрос от деканата себе же', null), /задают студенты/);
     const question = await m.handbook.askQuestion(m.pool, fresh, 'Есть ли у нас военная кафедра?', 'военная кафедра');
     // Тот же вопрос дважды — двойное нажатие, а разные вопросы задавать можно
     await assert.rejects(() => m.handbook.askQuestion(m.pool, fresh, 'Есть ли у нас военная кафедра?', null), /уже отправлен/i);
@@ -361,7 +370,7 @@ describe('справочник факультета', { skip: !DB_URL && 'TEST_D
     ))[0]!;
     assert.equal(notification.reader_id, fresh.reader.id, 'адресат — читатель справочника');
     assert.equal(notification.person_id, null, 'читатель может не быть в списках деканата');
-    assert.equal(notification.user_id, user.id);
+    assert.equal(notification.user_id, asker.id);
   });
 
   it('объявление уходит только своей аудитории', async () => {
@@ -496,8 +505,8 @@ describe('справочник факультета', { skip: !DB_URL && 'TEST_D
       status = code;
       await m.pool.query("UPDATE notifications SET status = 'cancelled' WHERE status = 'pending'");
       const [row] = await q<{ id: number }>(
-        "UPDATE notifications SET status = 'pending', simulated = false, attempts = 0, send_after = now() - interval '1 second' WHERE id = (SELECT id FROM notifications WHERE kind = 'handbook_answer' AND user_id = $1 LIMIT 1) RETURNING id",
-        [user.id],
+        "UPDATE notifications SET status = 'pending', simulated = false, attempts = 0, send_after = now() - interval '1 second' WHERE id = (SELECT n.id FROM notifications n JOIN users u ON u.id = n.user_id WHERE n.kind = 'handbook_answer' AND u.max_user_id = $1 LIMIT 1) RETURNING id",
+        [919191],
       );
       await m.worker.dispatchDue(bot, async () => undefined);
       return (await q<{ status: string; attempts: number }>('SELECT status, attempts FROM notifications WHERE id = $1', [row!.id]))[0]!;
@@ -763,14 +772,14 @@ describe('справочник факультета', { skip: !DB_URL && 'TEST_D
     const opened = await m.handbook.getPage(m.pool, viaLink, uniPage!.id);
     assert.ok(opened.page.inherited, 'страница вуза открывается внутри справочника факультета');
 
-    // Ссылка на страницу вуза, которую факультет переписал, открывает версию факультета
-    const [overridden] = await q<{ id: string }>(
+    // Ссылка на общую страницу с уточнением открывает её вместе с уточнением факультета
+    const [supplemented] = await q<{ id: string }>(
       "SELECT p.id FROM pages p WHERE p.handbook_id = (SELECT parent_id FROM handbooks WHERE id = $1) AND p.slug = 'spravka-ob-obuchenii'",
       [ids.handbookId],
     );
-    const facultyVersion = await m.handbook.getPage(m.pool, viaLink, overridden!.id);
-    assert.equal(facultyVersion.page.inherited, false);
-    assert.match(facultyVersion.page.summary ?? '', /ИИТ/);
+    const withLocal = await m.handbook.getPage(m.pool, viaLink, supplemented!.id);
+    assert.equal(withLocal.page.source, 'university+local');
+    assert.match(JSON.stringify(withLocal.page.blocks), /каб\. 214/);
   });
 
   it('аудит: поиск не падает на служебных словах и находит опечатки', async () => {
@@ -1844,7 +1853,7 @@ describe('справочник факультета', { skip: !DB_URL && 'TEST_D
     ))[0];
     assert.deepEqual(Object.values(leftovers!).filter((n) => n !== 0), [], JSON.stringify(leftovers));
     const models = await q<{ n: number }>('SELECT count(*)::int AS n FROM users WHERE max_user_id < 0 AND username = $1', [`demo-model-${owner.id}`]);
-    assert.equal(models[0]!.n, 28, 'модельные аккаунты только новой песочницы');
+    assert.equal(models[0]!.n, 30, 'модельные аккаунты только новой песочницы');
     const [strangerRow] = await q<{ active_person_id: string | null }>('SELECT active_person_id FROM users WHERE id = $1', [stranger.id]);
     assert.equal(strangerRow!.active_person_id, null, 'запись из удалённой песочницы больше не активна');
     const strangerReaders = await q('SELECT 1 FROM handbook_readers WHERE user_id = $1 AND handbook_id = $2', [stranger.id, ids.handbookId]);

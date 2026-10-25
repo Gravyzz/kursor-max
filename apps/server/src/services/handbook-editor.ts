@@ -4,7 +4,7 @@ import { many, one, tx } from '../db/pool.js';
 import { AppError, forbidden, notFound } from '../lib/errors.js';
 import { audit, getUniversity } from './common.js';
 import { todayIn, zonedToUtc } from '../domain/dates.js';
-import { cancelPending, enqueue, enqueueToReader } from '../notify/outbox.js';
+import { cancelPending, enqueue, enqueueToReader, retractSent } from '../notify/outbox.js';
 import {
   audienceSchema, blocksSchema, calendarDate, deadlineBlocks, describeBlockIssue, draftBlocksSchema, pageSearchText, pageSearchTitle, publishIssues, slugify,
   type Block,
@@ -104,6 +104,8 @@ async function ownPage(db: Db, scope: EditorScope, pageId: string, options: { lo
     draft_summary: string | null; draft_blocks: Block[] | null; draft_note: string | null; owner_person_id: string | null;
     review_at: string | null; checked_at: Date | null; updated_at: Date; published_at: Date | null; review_requested_at: Date | null;
     return_note: string | null; returned_at: Date | null; version: string;
+    version_no: number; inherited_from: string | null; base_version: number | null; override_reason: string | null;
+    owner_unit: string | null; backup_owner_person_id: string | null; review_interval_days: number;
   }>(db, `SELECT *, ${PAGE_VERSION} AS version FROM pages WHERE id = $1${options.lock ? ' FOR UPDATE' : ''}`, [pageId]);
   if (!page) throw notFound('Страница не найдена');
   if (page.handbook_id !== scope.handbook.id) throw forbidden('Страница другого справочника');
@@ -146,17 +148,75 @@ export async function editorStructure(db: Db, scope: EditorScope) {
   const pages = await many<{
     id: string; section_id: string; title: string; published_title: string; status: string; updated_at: Date; checked_at: Date | null;
     review_at: string | null; has_draft: boolean; views: number; helpful: number; not_helpful: number;
+    recent_helpful: number; recent_not_helpful: number;
+    owner_unit: string | null; owner_name: string | null; inherited_from: string | null; base_behind: boolean;
+    scoped: boolean;
   }>(
     db,
-    `SELECT id, section_id, COALESCE(draft_title, title) AS title, title AS published_title, ${EDITOR_STATUS} AS status,
-            updated_at, checked_at, review_at, (draft_blocks IS NOT NULL) AS has_draft, views, helpful, not_helpful
-       FROM pages WHERE handbook_id = $1 ORDER BY position, COALESCE(draft_title, title)`,
+    `SELECT pg.id, pg.section_id, COALESCE(pg.draft_title, pg.title) AS title, pg.title AS published_title,
+            CASE WHEN pg.status = 'published' AND pg.review_requested_at IS NOT NULL THEN 'review' ELSE pg.status END AS status,
+            pg.updated_at, pg.checked_at, to_char(pg.review_at, 'YYYY-MM-DD') AS review_at, (pg.draft_blocks IS NOT NULL) AS has_draft,
+            pg.views, pg.helpful, pg.not_helpful, pg.owner_unit, ow.full_name AS owner_name, pg.inherited_from,
+            -- Оценки после последней публикации: по ним решаем, «требует ли страница внимания»
+            GREATEST(pg.helpful - pg.helpful_before, 0) AS recent_helpful,
+            GREATEST(pg.not_helpful - pg.not_helpful_before, 0) AS recent_not_helpful,
+            (bp.id IS NOT NULL AND bp.version_no > COALESCE(pg.base_version, 0)) AS base_behind,
+            (pg.institute_ids IS NOT NULL) AS scoped
+       FROM pages pg
+       LEFT JOIN persons ow ON ow.id = pg.owner_person_id
+       LEFT JOIN pages bp ON bp.id = pg.inherited_from AND bp.status = 'published'
+      WHERE pg.handbook_id = $1 ORDER BY pg.position, COALESCE(pg.draft_title, pg.title)`,
     [scope.handbook.id],
   );
   return sections.map((section) => ({
     ...section,
     pages: pages.filter((page) => page.section_id === section.id),
   }));
+}
+
+/**
+ * Сроки справочника для команды: что студенты увидят в «Ближайших сроках» и о чём напомнит бот.
+ * Срок — это блок «Срок» на странице: здесь он виден списком, а создаётся на странице.
+ * Черновые сроки (страница ещё не опубликована или правки не опубликованы) — отдельно: студенты их пока не видят.
+ */
+export async function editorDeadlines(db: Db, scope: EditorScope) {
+  const university = await getUniversity(db, scope.handbook.university_id);
+  const today = todayIn(university.timezone);
+  const chain = scope.handbook.parent_id ? [scope.handbook.id, scope.handbook.parent_id] : [scope.handbook.id];
+  const live = await many<{ id: string; page_id: string; title: string; starts_on: string; ends_on: string | null; page_title: string; shared: boolean; remind_days: number[] }>(
+    db,
+    `SELECT d.id, d.page_id, d.title, to_char(d.starts_on, 'YYYY-MM-DD') AS starts_on, to_char(d.ends_on, 'YYYY-MM-DD') AS ends_on,
+            p.title AS page_title, (d.handbook_id <> $1) AS shared, d.remind_days
+       FROM handbook_deadlines d
+       JOIN pages p ON p.id = d.page_id AND p.status = 'published'
+      WHERE d.handbook_id = ANY($2::uuid[])
+        AND COALESCE(d.ends_on, d.starts_on) >= $3::date
+        AND (d.handbook_id = $1 OR page_for_handbook(p.institute_ids, $1))
+        AND NOT EXISTS (SELECT 1 FROM pages ov WHERE ov.handbook_id = $1 AND ov.inherited_from = d.page_id AND ov.status = 'published')
+      ORDER BY d.starts_on, d.title
+      LIMIT 60`,
+    [scope.handbook.id, chain, today],
+  );
+  const drafts = await many<{ page_id: string; page_title: string; block_id: string; title: string | null; starts_on: string | null }>(
+    db,
+    `SELECT p.id AS page_id, COALESCE(p.draft_title, p.title) AS page_title, b->>'id' AS block_id, b->>'title' AS title, b->>'startsOn' AS starts_on
+       FROM pages p CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(p.draft_blocks) = 'array' THEN p.draft_blocks ELSE '[]'::jsonb END) b
+      WHERE p.handbook_id = $1 AND p.status <> 'archived' AND b->>'type' = 'deadline'
+        AND NOT EXISTS (SELECT 1 FROM handbook_deadlines d WHERE d.page_id = p.id AND d.block_id = b->>'id')
+      ORDER BY b->>'startsOn' NULLS LAST
+      LIMIT 30`,
+    [scope.handbook.id],
+  );
+  return {
+    today,
+    deadlines: live.map((row) => ({
+      id: row.id, pageId: row.page_id, pageTitle: row.page_title, title: row.title,
+      startsOn: row.starts_on, endsOn: row.ends_on, remindDays: row.remind_days,
+      /** Срок с общей страницы университета: правит университет, факультет может завести свою версию страницы. */
+      shared: row.shared,
+    })),
+    drafts: drafts.map((row) => ({ pageId: row.page_id, pageTitle: row.page_title, blockId: row.block_id, title: row.title ?? '', startsOn: row.starts_on })),
+  };
 }
 
 /** Правка раздела: любые поля по отдельности, непереданные не меняются (API-13). */
@@ -238,8 +298,22 @@ export async function createPage(db: Db, scope: EditorScope, input: z.infer<type
     throw forbidden('Кому показывать страницу, решает администратор справочника. Отправьте страницу на проверку с комментарием');
   }
   return tx(async (client) => {
-    const section = await one<{ id: string }>(client, 'SELECT id FROM sections WHERE id = $1 AND handbook_id = $2', [input.sectionId, scope.handbook.id]);
+    const section = await one<{ id: string; slug: string }>(client, 'SELECT id, slug FROM sections WHERE id = $1 AND handbook_id = $2', [input.sectionId, scope.handbook.id]);
     if (!section) throw notFound('Раздел не найден');
+    // Такая страница уже есть в общей базе: вторая копия разошлась бы с общей при первом обновлении.
+    // Факультет добавляет к ней уточнение или явно заводит свою версию (D1, D2)
+    if (scope.handbook.parent_id) {
+      const shared = await one<{ id: string; title: string }>(
+        client,
+        `SELECT bp.id, bp.title FROM pages bp JOIN sections bs ON bs.id = bp.section_id
+          WHERE bp.handbook_id = $1 AND bp.status = 'published' AND bs.slug = $2 AND bp.slug = $3
+            AND page_for_handbook(bp.institute_ids, $4)`,
+        [scope.handbook.parent_id, section.slug, slugify(input.title), scope.handbook.id],
+      );
+      if (shared) {
+        throw new AppError('shared_page_exists', `«${shared.title}» уже есть в общей базе университета. Добавьте к ней уточнение или создайте свою версию`, 409, { basePageId: shared.id });
+      }
+    }
     const blocks = input.blocks ?? [];
     const row = await insertWithUniqueSlug(slugify(input.title), (slug) =>
       one<{ id: string }>(
@@ -414,24 +488,41 @@ export async function publishPage(db: Db, scope: EditorScope, pageId: string, ba
     }
     const blocks = parsed.data as Block[];
     const section = await one<{ title: string }>(client, 'SELECT title FROM sections WHERE id = $1', [page.section_id]);
-    const updated = await one<{ version: string }>(
+    const previousBlocks = page.published_at ? page.blocks : [];
+    const updated = await one<{ version: string; version_no: number }>(
       client,
       `UPDATE pages
           SET title = $2, summary = $3, blocks = $4, draft_title = NULL, draft_summary = NULL, draft_blocks = NULL,
               draft_note = NULL, status = 'published', review_requested_at = NULL, published_at = now(), updated_at = now(), checked_at = now(),
-              review_at = (now() + interval '180 days')::date, search_text = $5, search_title = $6,
-              return_note = NULL, returned_at = NULL
-        WHERE id = $1 RETURNING ${PAGE_VERSION} AS version`,
+              review_at = (now() + make_interval(days => review_interval_days))::date, search_text = $5, search_title = $6,
+              return_note = NULL, returned_at = NULL, version_no = version_no + 1,
+              -- Страницу исправили и опубликовали: прежние «не помогла» больше не про неё, считаем оценки заново
+              helpful_before = helpful, not_helpful_before = not_helpful
+        WHERE id = $1 RETURNING ${PAGE_VERSION} AS version, version_no`,
       [pageId, title, summary, JSON.stringify(blocks), pageSearchText(summary, blocks), pageSearchTitle(title, section?.title ?? null)],
     );
     await client.query(
-      'INSERT INTO page_versions(page_id, title, summary, blocks, author_person_id, note) VALUES ($1, $2, $3, $4, $5, $6)',
+      'INSERT INTO page_versions(page_id, title, summary, blocks, author_person_id, note, version_no) VALUES ($1, $2, $3, $4, $5, $6, $7)',
       // Подсказка шаблона в заметке — не комментарий к версии
-      [pageId, title, summary, JSON.stringify(blocks), scope.personId, isTemplateHint(page.draft_note) ? null : page.draft_note],
+      [pageId, title, summary, JSON.stringify(blocks), scope.personId, isTemplateHint(page.draft_note) ? null : page.draft_note, updated!.version_no],
     );
     await syncDeadlines(client, scope.handbook.id, pageId, blocks);
-    await audit(client, { universityId: scope.handbook.university_id, actorPersonId: scope.personId, actorUserId: scope.userId, action: 'handbook.page.publish', entity: 'page', entityId: pageId });
-    return { id: pageId, status: 'published' as const, updatedAt: updated!.version };
+    // Своя версия опубликована — уточнение к общей странице больше не нужно: студенты видят только свою версию
+    if (page.inherited_from) {
+      await client.query(
+        "UPDATE page_supplements SET status = 'archived', updated_at = now() WHERE handbook_id = $1 AND base_page_id = $2 AND status <> 'archived'",
+        [scope.handbook.id, page.inherited_from],
+      );
+      await client.query('DELETE FROM handbook_deadlines WHERE handbook_id = $1 AND page_id = $2', [scope.handbook.id, page.inherited_from]);
+    }
+    const affected = scope.handbook.institute_id === null && page.published_at
+      ? await notifyBaseChange(client, scope, pageId, updated!.version_no, previousBlocks, blocks, page.draft_note)
+      : { faculties: 0, overrides: 0, anchorsLost: 0 };
+    await audit(client, {
+      universityId: scope.handbook.university_id, actorPersonId: scope.personId, actorUserId: scope.userId, action: 'handbook.page.publish', entity: 'page', entityId: pageId,
+      data: { version: updated!.version_no, ...(scope.handbook.institute_id === null ? { base: true, ...affected } : {}) },
+    });
+    return { id: pageId, status: 'published' as const, updatedAt: updated!.version, version: updated!.version_no, affected };
   });
 }
 
@@ -453,7 +544,8 @@ export async function archivePage(_db: Db, scope: EditorScope, pageId: string) {
  */
 export async function syncDeadlines(db: Db, handbookId: string, pageId: string, blocks: Block[]) {
   const deadlines = deadlineBlocks(blocks);
-  await db.query('DELETE FROM handbook_deadlines WHERE page_id = $1 AND NOT (block_id = ANY($2::text[]))', [pageId, deadlines.map((block) => block.id)]);
+  // Сроки уточнений факультетов к общей странице живут под той же страницей, но в своём справочнике — их не трогаем
+  await db.query('DELETE FROM handbook_deadlines WHERE page_id = $1 AND handbook_id = $3 AND NOT (block_id = ANY($2::text[]))', [pageId, deadlines.map((block) => block.id), handbookId]);
   for (const block of deadlines) {
     await db.query(
       `INSERT INTO handbook_deadlines(handbook_id, page_id, block_id, title, starts_on, ends_on, remind_days, audience)
@@ -475,8 +567,194 @@ export async function syncDeadlines(db: Db, handbookId: string, pageId: string, 
   }
 }
 
+/** Администраторы справочника: участники-админы, администраторы факультета и деканат института. */
+export async function handbookAdmins(db: Db, handbookId: string): Promise<string[]> {
+  const rows = await many<{ person_id: string }>(
+    db,
+    `SELECT m.person_id FROM handbook_members m WHERE m.handbook_id = $1 AND m.role = 'admin'
+      UNION
+     SELECT r.person_id FROM org_roles r JOIN handbooks h ON h.institute_id = r.institute_id
+      WHERE h.id = $1 AND r.role = 'faculty_admin' AND r.revoked_at IS NULL
+      UNION
+     SELECT p.id FROM persons p JOIN handbooks h ON h.institute_id = p.institute_id
+      WHERE h.id = $1 AND p.role = 'dean' AND p.university_id = h.university_id`,
+    [handbookId],
+  );
+  return rows.map((row) => row.person_id);
+}
+
+/**
+ * Общую страницу опубликовали заново. Факультеты с уточнением получают новую общую часть сразу;
+ * факультеты со своей версией — сообщение «общая обновилась, сравните»; факультеты, чьё уточнение
+ * стояло после удалённого блока, — сообщение, что уточнение теперь в конце страницы.
+ */
+async function notifyBaseChange(client: Db, scope: EditorScope, pageId: string, version: number, before: Block[], after: Block[], note: string | null) {
+  // Обновление видят факультеты без опубликованной своей версии этой страницы
+  const faculties = await one<{ n: number }>(
+    client,
+    `SELECT count(DISTINCT h.institute_id)::int AS n FROM handbooks h
+      WHERE h.parent_id = $1 AND h.status = 'active'
+        AND page_for_handbook((SELECT institute_ids FROM pages WHERE id = $2), h.id)
+        AND NOT EXISTS (SELECT 1 FROM pages ov WHERE ov.handbook_id = h.id AND ov.inherited_from = $2 AND ov.status = 'published')`,
+    [scope.handbook.id, pageId],
+  );
+  const overrides = await many<{ id: string; handbook_id: string }>(
+    client,
+    `SELECT pg.id, pg.handbook_id FROM pages pg JOIN handbooks h ON h.id = pg.handbook_id AND h.status = 'active'
+      WHERE pg.inherited_from = $1 AND pg.status <> 'archived'`,
+    [pageId],
+  );
+  for (const override of overrides) {
+    for (const admin of await handbookAdmins(client, override.handbook_id)) {
+      await enqueue(client, {
+        personId: admin,
+        kind: 'handbook_base_changed',
+        payload: { pageId: override.id, basePageId: pageId, version, note: isTemplateHint(note) ? null : note },
+        dedupeKey: `hb_base:${override.id}:${version}:${admin}`,
+      });
+    }
+  }
+  const kept = new Set(after.map((block) => block.id));
+  const removed = new Set(before.map((block) => block.id).filter((id) => !kept.has(id)));
+  const lost = removed.size
+    ? await many<{ handbook_id: string }>(
+        client,
+        "SELECT handbook_id FROM page_supplements WHERE base_page_id = $1 AND status = 'published' AND anchor_block_id = ANY($2::text[])",
+        [pageId, [...removed]],
+      )
+    : [];
+  for (const supplement of lost) {
+    for (const admin of await handbookAdmins(client, supplement.handbook_id)) {
+      await enqueue(client, {
+        personId: admin,
+        kind: 'supplement_anchor_lost',
+        payload: { basePageId: pageId, handbookId: supplement.handbook_id, version },
+        dedupeKey: `hb_anchor:${pageId}:${supplement.handbook_id}:${version}:${admin}`,
+      });
+    }
+  }
+  return { faculties: faculties?.n ?? 0, overrides: overrides.length, anchorsLost: lost.length };
+}
+
+/**
+ * «Ничего не изменилось»: ответственный подтверждает актуальность без новой публикации.
+ * Дата проверки у студентов обновляется, следующая проверка сдвигается на интервал страницы.
+ */
+export async function verifyPage(_db: Db, scope: EditorScope, pageId: string) {
+  return tx(async (client) => {
+    const page = await ownPage(client, scope, pageId, { lock: true });
+    if (scope.role !== 'admin' && page.owner_person_id !== scope.personId && page.backup_owner_person_id !== scope.personId) {
+      throw forbidden('Подтвердить актуальность может ответственный за страницу или администратор');
+    }
+    if (page.status !== 'published') throw new AppError('not_published', 'Подтвердить можно только опубликованную страницу', 409);
+    const row = await one<{ checked_at: Date; review_at: string }>(
+      client,
+      `UPDATE pages SET checked_at = now(), review_at = (now() + make_interval(days => review_interval_days))::date
+        WHERE id = $1 RETURNING checked_at, to_char(review_at, 'YYYY-MM-DD') AS review_at`,
+      [pageId],
+    );
+    await audit(client, { universityId: scope.handbook.university_id, actorPersonId: scope.personId, actorUserId: scope.userId, action: 'handbook.page.verify', entity: 'page', entityId: pageId });
+    return { checkedAt: row!.checked_at, reviewAt: row!.review_at };
+  });
+}
+
+export const ownershipSchema = z.object({
+  ownerPersonId: z.string().uuid().nullable().optional(),
+  ownerUnit: z.string().trim().max(120).nullable().optional(),
+  backupPersonId: z.string().uuid().nullable().optional(),
+  reviewIntervalDays: z.coerce.number().int().min(7).max(730).optional(),
+});
+
+/** Для каких факультетов общая страница: null — для всех, иначе список институтов. */
+export const facultyScopeSchema = z.object({
+  instituteIds: z.array(z.string().uuid()).max(500).nullable(),
+});
+
+/**
+ * Выбор факультетов для общей страницы. Действует сразу, без новой публикации: страница появляется
+ * или пропадает у студентов выбранных факультетов. Уточнения и свои версии факультетов не удаляются.
+ */
+export async function setFacultyScope(_db: Db, scope: EditorScope, pageId: string, input: z.infer<typeof facultyScopeSchema>) {
+  requireAdmin(scope);
+  if (scope.handbook.institute_id !== null) throw new AppError('not_base', 'Выбор факультетов есть только у страниц общей базы', 409);
+  const ids = input.instituteIds ? [...new Set(input.instituteIds)] : null;
+  if (ids && ids.length === 0) throw new AppError('no_faculties', 'Выберите хотя бы один факультет или «Все факультеты»', 400);
+  return tx(async (client) => {
+    await ownPage(client, scope, pageId, { lock: true });
+    if (ids) {
+      const found = await one<{ n: number }>(client, 'SELECT count(*)::int AS n FROM institutes WHERE id = ANY($1::uuid[]) AND university_id = $2', [ids, scope.handbook.university_id]);
+      if ((found?.n ?? 0) !== ids.length) throw notFound('Факультет не найден в этом вузе');
+    }
+    await client.query('UPDATE pages SET institute_ids = $2, updated_at = now() WHERE id = $1', [pageId, ids]);
+    await audit(client, {
+      universityId: scope.handbook.university_id, actorPersonId: scope.personId, actorUserId: scope.userId,
+      action: 'handbook.page.faculties', entity: 'page', entityId: pageId, data: { instituteIds: ids },
+    });
+    return { instituteIds: ids };
+  });
+}
+
+/** Кто отвечает за страницу и как часто её проверять. Меняет администратор справочника. */
+export async function setOwnership(_db: Db, scope: EditorScope, pageId: string, input: z.infer<typeof ownershipSchema>) {
+  requireAdmin(scope);
+  if (input.ownerPersonId && input.ownerPersonId === input.backupPersonId) {
+    throw new AppError('same_person', 'Замена — другой человек: выберите не того, кто уже отвечает за страницу', 400);
+  }
+  return tx(async (client) => {
+    await ownPage(client, scope, pageId, { lock: true });
+    for (const personId of [input.ownerPersonId, input.backupPersonId]) {
+      if (!personId) continue;
+      const person = await one(client, 'SELECT 1 FROM persons WHERE id = $1 AND university_id = $2', [personId, scope.handbook.university_id]);
+      if (!person) throw notFound('Сотрудник не найден в этом вузе');
+    }
+    await client.query(
+      `UPDATE pages
+          SET owner_person_id = CASE WHEN $2::boolean THEN $3::uuid ELSE owner_person_id END,
+              owner_unit = CASE WHEN $4::boolean THEN $5 ELSE owner_unit END,
+              backup_owner_person_id = CASE WHEN $6::boolean THEN $7::uuid ELSE backup_owner_person_id END,
+              review_interval_days = COALESCE($8, review_interval_days),
+              review_at = CASE WHEN $8::int IS NOT NULL AND checked_at IS NOT NULL THEN (checked_at + make_interval(days => $8::int))::date ELSE review_at END
+        WHERE id = $1`,
+      [
+        pageId,
+        input.ownerPersonId !== undefined, input.ownerPersonId ?? null,
+        input.ownerUnit !== undefined, input.ownerUnit || null,
+        input.backupPersonId !== undefined, input.backupPersonId ?? null,
+        input.reviewIntervalDays ?? null,
+      ],
+    );
+    await audit(client, { universityId: scope.handbook.university_id, actorPersonId: scope.personId, actorUserId: scope.userId, action: 'handbook.page.owner', entity: 'page', entityId: pageId, data: input });
+    return { ok: true as const };
+  });
+}
+
 export async function pageForEditor(db: Db, scope: EditorScope, pageId: string) {
   const page = await ownPage(db, scope, pageId);
+  const people = await one<{ owner: string | null; backup: string | null }>(
+    db,
+    'SELECT (SELECT full_name FROM persons WHERE id = $1) AS owner, (SELECT full_name FROM persons WHERE id = $2) AS backup',
+    [page.owner_person_id, page.backup_owner_person_id],
+  );
+  const base = page.inherited_from
+    ? await one<{ id: string; title: string; version_no: number; status: string; owner_unit: string | null }>(
+        db, 'SELECT id, title, version_no, status, owner_unit FROM pages WHERE id = $1', [page.inherited_from],
+      )
+    : undefined;
+  // Оценки студентов: всего и после последней публикации; комментарии «не помогла» — подсказка, что исправить
+  const rating = await one<{ helpful: number; not_helpful: number; recent_helpful: number; recent_not_helpful: number }>(
+    db,
+    `SELECT helpful, not_helpful, GREATEST(helpful - helpful_before, 0) AS recent_helpful,
+            GREATEST(not_helpful - not_helpful_before, 0) AS recent_not_helpful FROM pages WHERE id = $1`,
+    [pageId],
+  );
+  const complaints = await many<{ comment: string; created_at: Date }>(
+    db,
+    `SELECT comment, created_at FROM page_feedback
+      WHERE page_id = $1 AND NOT helpful AND comment IS NOT NULL AND btrim(comment) <> ''
+        AND ($2::timestamptz IS NULL OR created_at > $2)
+      ORDER BY created_at DESC LIMIT 5`,
+    [pageId, page.published_at],
+  );
   const versions = await many<{ id: number; title: string; created_at: Date; note: string | null; author: string | null }>(
     db,
     `SELECT v.id, v.title, v.created_at, v.note, p.full_name AS author
@@ -510,13 +788,55 @@ export async function pageForEditor(db: Db, scope: EditorScope, pageId: string) 
     /** Когда вернули на доработку (null — не возвращали): так видно возврат и без причины. */
     returnedAt: page.returned_at,
     versions,
+    /** Оценки: recent* — после последней публикации, по ним ставится отметка «не помогла». */
+    rating: {
+      helpful: rating?.helpful ?? 0,
+      notHelpful: rating?.not_helpful ?? 0,
+      recentHelpful: rating?.recent_helpful ?? 0,
+      recentNotHelpful: rating?.recent_not_helpful ?? 0,
+      since: page.published_at,
+      complaints: complaints.map((row) => ({ text: row.comment, at: row.created_at })),
+    },
     /** Роль в справочнике: редактор отправляет на проверку, администратор публикует. */
     role: scope.role,
     /** Что мешает опубликовать черновик (пусто — можно публиковать). */
     issues: pageIssues(page.draft_blocks ?? page.blocks, page.draft_note),
     /** Ссылка на страницу для QR-плаката и «Поделиться». */
     link: deepLink(await getBotIdentity(), 'startapp', `hbp_${page.id}`),
-    handbook: { title: scope.handbook.title, emoji: scope.handbook.emoji },
+    handbook: { title: scope.handbook.title, emoji: scope.handbook.emoji, isBase: scope.handbook.institute_id === null },
+    /** Общая база: для каких факультетов страница (null — для всех) и из кого выбирать. */
+    faculties: scope.handbook.institute_id === null
+      ? {
+          selected: (await one<{ institute_ids: string[] | null }>(db, 'SELECT institute_ids FROM pages WHERE id = $1', [page.id]))?.institute_ids ?? null,
+          options: (await many<{ id: string; name: string; short_name: string }>(
+            db, 'SELECT id, name, short_name FROM institutes WHERE university_id = $1 AND closed_at IS NULL ORDER BY short_name', [scope.handbook.university_id],
+          )).map((row) => ({ id: row.id, name: row.name, shortName: row.short_name })),
+        }
+      : null,
+    /** Ответственность за актуальность: кто, замена, как часто проверять. */
+    ownership: {
+      ownerPersonId: page.owner_person_id,
+      ownerName: people?.owner ?? null,
+      ownerUnit: page.owner_unit,
+      backupPersonId: page.backup_owner_person_id,
+      backupName: people?.backup ?? null,
+      reviewIntervalDays: page.review_interval_days,
+      checkedAt: page.checked_at,
+      reviewAt: page.review_at,
+    },
+    /** Своя версия факультета: из какой общей версии создана и не обновилась ли общая с тех пор. */
+    override: base
+      ? {
+          basePageId: base.id,
+          baseTitle: base.title,
+          baseVersion: base.version_no,
+          fromVersion: page.base_version ?? 0,
+          behind: base.status === 'published' && base.version_no > (page.base_version ?? 0),
+          baseArchived: base.status === 'archived',
+          baseOwnerUnit: base.owner_unit,
+          reason: page.override_reason,
+        }
+      : null,
   };
 }
 
@@ -552,9 +872,11 @@ export async function analytics(db: Db, scope: EditorScope) {
     ),
     many<{ id: string; title: string; helpful: number; not_helpful: number }>(
       db,
-      `SELECT id, title, helpful, not_helpful FROM pages
-        WHERE handbook_id = $1 AND not_helpful > helpful AND (helpful + not_helpful) >= 3
-        ORDER BY not_helpful DESC LIMIT 5`,
+      // Только оценки после последней публикации: исправленная страница уходит из списка
+      `SELECT id, title, helpful - helpful_before AS helpful, not_helpful - not_helpful_before AS not_helpful FROM pages
+        WHERE handbook_id = $1 AND status <> 'archived' AND not_helpful - not_helpful_before > helpful - helpful_before
+          AND (helpful - helpful_before) + (not_helpful - not_helpful_before) >= 3
+        ORDER BY not_helpful - not_helpful_before DESC LIMIT 5`,
       [scope.handbook.id],
     ),
   ]);
@@ -832,8 +1154,10 @@ export async function deleteAnnouncement(db: Db, scope: EditorScope, id: string)
     const row = await one<{ id: string }>(client, 'DELETE FROM announcements WHERE id = $1 AND handbook_id = $2 RETURNING id', [id, scope.handbook.id]);
     if (!row) throw notFound('Объявление не найдено');
     await cancelPending(client, `hb_ann:${id}:`);
-    await audit(client, { universityId: scope.handbook.university_id, actorPersonId: scope.personId, actorUserId: scope.userId, action: 'handbook.announcement.delete', entity: 'announcement', entityId: id });
-    return { deleted: true };
+    // Объявление уже пришло в чаты — бот удалит эти сообщения, чтобы в чате не осталось того, чего нет в приложении
+    const retracted = await retractSent(client, `hb_ann:${id}:`);
+    await audit(client, { universityId: scope.handbook.university_id, actorPersonId: scope.personId, actorUserId: scope.userId, action: 'handbook.announcement.delete', entity: 'announcement', entityId: id, data: { retracted } });
+    return { deleted: true, retracted };
   });
 }
 
@@ -860,28 +1184,11 @@ export async function createHandbook(
   if (actor.role !== 'dean' && !(actor.isDemo && actor.role === 'staff')) {
     throw forbidden('Создавать справочник может деканат или редактор своей демо-песочницы');
   }
-  if (actor.instituteId && actor.instituteId !== input.instituteId) {
-    throw forbidden('Справочник создаётся для своего института: другой институт подключает его деканат');
+  // Деканат без института не создаёт справочники за другие институты: их подключает администратор университета (D9)
+  if (actor.instituteId !== undefined && actor.instituteId !== input.instituteId) {
+    throw forbidden('Справочник создаётся для своего института: другой институт подключает администратор университета');
   }
   return tx(async (client) => {
-    const institute = await one<{ id: string; name: string }>(
-      client,
-      'SELECT id, name FROM institutes WHERE id = $1 AND university_id = $2',
-      [input.instituteId, actor.universityId],
-    );
-    if (!institute) throw notFound('Институт не найден');
-
-    const parent = input.inherit === false
-      ? null
-      : await one<{ id: string }>(
-          client,
-          "SELECT id FROM handbooks WHERE university_id = $1 AND institute_id IS NULL AND status = 'active' ORDER BY created_at LIMIT 1",
-          [actor.universityId],
-        );
-
-    // Слаг справочника уникален на всей платформе: по нему работает диплинк hb_<слаг>.
-    // Справочник из демо-песочницы получает служебный хвост, как у справочников самой песочницы:
-    // иначе посетитель демо занял бы человекочитаемое имя («spravochnik-tgu») раньше настоящего вуза (API-7).
     const university = await one<{ is_demo: boolean; demo_owner_user_id: number | null }>(
       client,
       'SELECT is_demo, demo_owner_user_id FROM universities WHERE id = $1',
@@ -890,37 +1197,128 @@ export async function createHandbook(
     if (actor.role === 'staff' && (!university?.is_demo || Number(university.demo_owner_user_id) !== actor.userId)) {
       throw forbidden('Редактор может создавать справочники только в своей демо-песочнице');
     }
-    const base = slugify(input.title, 'handbook');
-    const slugBase = university?.is_demo
-      ? `${base.slice(0, 40).replace(/-+$/, '') || 'handbook'}-demo-${actor.universityId.replace(/-/g, '').slice(0, 8)}`
-      : base;
-    const row = await insertWithUniqueSlug(slugBase, (slug) =>
-      one<{ id: string; slug: string }>(
-        client,
-        `INSERT INTO handbooks(university_id, institute_id, parent_id, slug, title, subtitle, emoji)
-         VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, '📘'))
-         ON CONFLICT (slug) DO NOTHING
-         RETURNING id, slug`,
-        [actor.universityId, institute.id, parent?.id ?? null, slug, input.title, input.subtitle ?? null, input.emoji ?? null],
-      ),
-    );
-    await client.query(
-      "INSERT INTO handbook_members(handbook_id, person_id, role) VALUES ($1, $2, 'admin') ON CONFLICT DO NOTHING",
-      [row!.id, actor.personId],
-    );
-    const seeded = input.template === false ? { sections: 0, pages: 0 } : await seedTemplate(client, row!.id, { ownerPersonId: actor.personId });
-    await audit(client, {
-      universityId: actor.universityId,
-      actorPersonId: actor.personId,
-      actorUserId: actor.userId,
-      action: 'handbook.create',
-      entity: 'handbook',
-      entityId: row!.id,
-      data: { institute: institute.name, ...seeded, inherited: Boolean(parent) },
-    });
-    return { ...row!, ...seeded, inherited: Boolean(parent) };
+    return createHandbookIn(client, { ...input, universityId: actor.universityId, ownerPersonId: actor.personId, actorUserId: actor.userId });
   });
 }
+
+/**
+ * Справочник факультета в открытой транзакции: общий для деканата и администратора университета.
+ * Заготовки шаблона, которые уже есть в общей базе, не создаются: общая страница и так видна студентам,
+ * а копия-черновик разошлась бы с ней при первом обновлении (D2).
+ */
+export async function createHandbookIn(
+  client: Db,
+  input: z.infer<typeof handbookInputSchema> & { universityId: string; ownerPersonId: string; actorUserId: number },
+) {
+  const institute = await one<{ id: string; name: string }>(
+    client,
+    'SELECT id, name FROM institutes WHERE id = $1 AND university_id = $2',
+    [input.instituteId, input.universityId],
+  );
+  if (!institute) throw notFound('Институт не найден');
+
+  const parent = input.inherit === false
+    ? null
+    : await one<{ id: string }>(
+        client,
+        "SELECT id FROM handbooks WHERE university_id = $1 AND institute_id IS NULL AND status = 'active' ORDER BY created_at LIMIT 1",
+        [input.universityId],
+      );
+
+  // Слаг справочника уникален на всей платформе: по нему работает диплинк hb_<слаг>.
+  // Справочник из демо-песочницы получает служебный хвост, как у справочников самой песочницы:
+  // иначе посетитель демо занял бы человекочитаемое имя («spravochnik-tgu») раньше настоящего вуза (API-7).
+  const university = await one<{ is_demo: boolean }>(client, 'SELECT is_demo FROM universities WHERE id = $1', [input.universityId]);
+  const base = slugify(input.title, 'handbook');
+  const slugBase = university?.is_demo
+    ? `${base.slice(0, 40).replace(/-+$/, '') || 'handbook'}-demo-${input.universityId.replace(/-/g, '').slice(0, 8)}`
+    : base;
+  const row = await insertWithUniqueSlug(slugBase, (slug) =>
+    one<{ id: string; slug: string }>(
+      client,
+      `INSERT INTO handbooks(university_id, institute_id, parent_id, slug, title, subtitle, emoji)
+       VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, '📘'))
+       ON CONFLICT (slug) DO NOTHING
+       RETURNING id, slug`,
+      [input.universityId, institute.id, parent?.id ?? null, slug, input.title, input.subtitle ?? null, input.emoji ?? null],
+    ),
+  );
+  await client.query(
+    "INSERT INTO handbook_members(handbook_id, person_id, role) VALUES ($1, $2, 'admin') ON CONFLICT DO NOTHING",
+    [row!.id, input.ownerPersonId],
+  );
+  const shared = parent
+    ? new Set((await many<{ key: string }>(
+        client,
+        `SELECT bs.slug || '/' || bp.slug AS key FROM pages bp JOIN sections bs ON bs.id = bp.section_id
+          WHERE bp.handbook_id = $1 AND bp.status <> 'archived' AND bp.institute_ids IS NULL`,
+        [parent.id],
+      )).map((r) => r.key))
+    : new Set<string>();
+  const seeded = input.template === false
+    ? { sections: 0, pages: 0, skipped: 0 }
+    : await seedTemplate(client, row!.id, { ownerPersonId: input.ownerPersonId, skip: shared });
+  await audit(client, {
+    universityId: input.universityId,
+    actorPersonId: input.ownerPersonId,
+    actorUserId: input.actorUserId,
+    action: 'handbook.create',
+    entity: 'handbook',
+    entityId: row!.id,
+    data: { institute: institute.name, ...seeded, inherited: Boolean(parent) },
+  });
+  return { ...row!, ...seeded, inherited: Boolean(parent) };
+}
+
+/**
+ * Старшинство в команде справочника. Руководство (3) назначает университет или должность:
+ * администратор университета — для общей базы, администратор факультета и деканат — для справочника факультета.
+ * Ниже — администратор справочника (2) и редактор (1). Управлять можно только теми, кто младше:
+ * администратор не меняет роль и не убирает другого администратора, а руководство — друг друга.
+ */
+export type TeamLead = 'university_admin' | 'faculty_admin' | 'dean';
+const LEAD_TITLE: Record<TeamLead, string> = {
+  university_admin: 'Администратор университета',
+  faculty_admin: 'Администратор факультета',
+  dean: 'Деканат',
+};
+const ROLE_TITLE: Record<MemberRole, string> = { admin: 'Администратор', editor: 'Редактор' };
+const roleRank = (role: MemberRole | null) => (role === 'admin' ? 2 : role === 'editor' ? 1 : 0);
+
+async function teamLeads(db: Db, handbook: HandbookRow, personIds: string[]): Promise<Map<string, TeamLead>> {
+  if (!personIds.length) return new Map();
+  const rows = await many<{ id: string; lead: TeamLead | null }>(
+    db,
+    `SELECT p.id,
+            CASE
+              WHEN EXISTS (SELECT 1 FROM org_roles r WHERE r.person_id = p.id AND r.revoked_at IS NULL AND r.university_id = $2
+                             AND r.role = 'university_admin' AND $3::uuid IS NULL) THEN 'university_admin'
+              WHEN EXISTS (SELECT 1 FROM org_roles r WHERE r.person_id = p.id AND r.revoked_at IS NULL AND r.university_id = $2
+                             AND r.role = 'faculty_admin' AND r.institute_id = $3::uuid) THEN 'faculty_admin'
+              WHEN p.role = 'dean' AND $3::uuid IS NOT NULL AND p.institute_id = $3::uuid THEN 'dean'
+            END AS lead
+       FROM persons p WHERE p.id = ANY($1::uuid[])`,
+    [personIds, handbook.university_id, handbook.institute_id],
+  );
+  return new Map(rows.filter((r) => r.lead).map((r) => [r.id, r.lead!]));
+}
+
+/** Старшинство того, кто сейчас действует: руководство — 3, иначе по роли в справочнике. */
+async function actorRank(db: Db, scope: EditorScope): Promise<number> {
+  if (!scope.personId) return roleRank(scope.role);
+  const leads = await teamLeads(db, scope.handbook, [scope.personId]);
+  return leads.has(scope.personId) ? 3 : roleRank(scope.role);
+}
+
+async function targetRank(db: Db, scope: EditorScope, personId: string): Promise<number> {
+  const leads = await teamLeads(db, scope.handbook, [personId]);
+  if (leads.has(personId)) return 3;
+  const member = await one<{ role: MemberRole }>(db, 'SELECT role FROM handbook_members WHERE handbook_id = $1 AND person_id = $2', [scope.handbook.id, personId]);
+  return roleRank(member?.role ?? null);
+}
+
+const SENIOR = 'Управлять можно только теми, у кого роль ниже вашей: администратора назначает и убирает руководство справочника — деканат или администратор факультета';
+const ADMIN_BY_LEAD = 'Назначить администратора может руководство справочника — деканат или администратор факультета. Вы можете пригласить редактора';
 
 /** Добавить редактора: студсовет и тьюторы ведут справочник наравне с деканатом. */
 export async function addMember(db: Db, scope: EditorScope, personId: string, role: MemberRole) {
@@ -931,6 +1329,9 @@ export async function addMember(db: Db, scope: EditorScope, personId: string, ro
     [personId, scope.handbook.university_id],
   );
   if (!person) throw notFound('Человек не найден в вузе');
+  const mine = await actorRank(db, scope);
+  if (personId !== scope.personId && (await targetRank(db, scope, personId)) >= mine) throw forbidden(SENIOR);
+  if (roleRank(role) >= mine) throw forbidden(ADMIN_BY_LEAD);
   await db.query(
     `INSERT INTO handbook_members(handbook_id, person_id, role) VALUES ($1, $2, $3)
      ON CONFLICT (handbook_id, person_id) DO UPDATE SET role = EXCLUDED.role`,
@@ -943,6 +1344,7 @@ export async function addMember(db: Db, scope: EditorScope, personId: string, ro
 export async function removeMember(db: Db, scope: EditorScope, personId: string) {
   requireAdmin(scope);
   if (personId === scope.personId) throw new AppError('self_remove', 'Нельзя удалить самого себя из редакторов', 409);
+  if ((await targetRank(db, scope, personId)) >= (await actorRank(db, scope))) throw forbidden(SENIOR);
   return tx(async (client) => {
     const removed = await one(client, 'DELETE FROM handbook_members WHERE handbook_id = $1 AND person_id = $2 RETURNING person_id', [scope.handbook.id, personId]);
     if (!removed) throw notFound('Такого участника в команде нет');
@@ -967,6 +1369,7 @@ export const inviteSchema = z.object({
  */
 export async function inviteEditor(db: Db, scope: EditorScope, input: z.infer<typeof inviteSchema>) {
   requireAdmin(scope);
+  if (roleRank(input.role) >= (await actorRank(db, scope))) throw forbidden(ADMIN_BY_LEAD);
   return tx(async (client) => {
     const identity = await getBotIdentity();
     // Двойное нажатие «Пригласить» не должно завести двух одинаковых участников (API-11):
@@ -1007,9 +1410,9 @@ export async function inviteEditor(db: Db, scope: EditorScope, input: z.infer<ty
 /** Редакторы справочника: кто уже принял приглашение, а у кого ссылка ещё не открыта. */
 export async function listMembers(db: Db, scope: EditorScope) {
   const identity = await getBotIdentity();
-  const rows = await many<{ person_id: string; full_name: string; role: MemberRole; connected: boolean; code: string | null }>(
+  const rows = await many<{ person_id: string; full_name: string; role: MemberRole; kind: string; connected: boolean; code: string | null }>(
     db,
-    `SELECT m.person_id, p.full_name, m.role, (p.user_id IS NOT NULL) AS connected,
+    `SELECT m.person_id, p.full_name, m.role, p.role AS kind, (p.user_id IS NOT NULL) AS connected,
             (SELECT i.code FROM invites i WHERE i.person_id = p.id AND i.used_at IS NULL AND i.expires_at > now()
               ORDER BY i.created_at DESC LIMIT 1) AS code
        FROM handbook_members m JOIN persons p ON p.id = m.person_id
@@ -1017,13 +1420,36 @@ export async function listMembers(db: Db, scope: EditorScope) {
       ORDER BY (m.role = 'admin') DESC, p.full_name`,
     [scope.handbook.id],
   );
-  return rows.map((row) => ({
-    personId: row.person_id,
-    fullName: row.full_name,
-    role: row.role,
-    connected: row.connected,
-    you: row.person_id === scope.personId,
-    // Ссылка-приглашение — это ключ к правам: показываем её только администратору
-    link: scope.role === 'admin' && !row.connected && row.code ? deepLink(identity, 'start', `inv_${row.code}`) : null,
-  }));
+  const leads = await teamLeads(db, scope.handbook, rows.map((row) => row.person_id));
+  const mine = await actorRank(db, scope);
+  const members = rows.map((row) => {
+    const lead = leads.get(row.person_id) ?? null;
+    const rank = lead ? 3 : roleRank(row.role);
+    const you = row.person_id === scope.personId;
+    return {
+      personId: row.person_id,
+      fullName: row.full_name,
+      role: row.role,
+      /** Подпись по старшинству: «Деканат», «Администратор факультета», «Администратор», «Редактор». */
+      title: lead ? LEAD_TITLE[lead] : ROLE_TITLE[row.role],
+      /** Кто это по записи вуза: студсовет или сотрудник. Руководству подпись не нужна. */
+      kind: lead ? null : row.kind === 'student' ? 'студсовет' : 'сотрудник',
+      rank,
+      connected: row.connected,
+      you,
+      /** Менять роль и убирать из команды можно только тех, кто младше. */
+      canManage: !you && scope.role === 'admin' && rank < mine,
+      // Ссылка-приглашение — это ключ к правам: показываем её только тем, кто может управлять человеком
+      link: scope.role === 'admin' && rank < mine && !row.connected && row.code ? deepLink(identity, 'start', `inv_${row.code}`) : null,
+    };
+  });
+  return members.sort((a, b) => b.rank - a.rank || a.fullName.localeCompare(b.fullName, 'ru'));
+}
+
+/** Что может текущий участник в команде: приглашать администраторов — только руководство. */
+export async function teamPowers(db: Db, scope: EditorScope) {
+  const mine = await actorRank(db, scope);
+  const leads = scope.personId ? await teamLeads(db, scope.handbook, [scope.personId]) : new Map<string, TeamLead>();
+  const lead = scope.personId ? leads.get(scope.personId) ?? null : null;
+  return { canInviteAdmin: scope.role === 'admin' && mine > 2, myTitle: lead ? LEAD_TITLE[lead] : ROLE_TITLE[scope.role] };
 }

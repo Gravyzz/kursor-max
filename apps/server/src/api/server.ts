@@ -10,6 +10,9 @@ import { authenticate } from './auth.js';
 import { registerCommonRoutes } from './routes/common.js';
 import { registerHandbookRoutes } from './routes/handbook.js';
 import { registerHandbookEditorRoutes } from './routes/handbook-editor.js';
+import { registerUniversityRoutes } from './routes/university.js';
+import { registerPlatformRoutes } from './routes/platform.js';
+import { registerFileRoutes } from './routes/files.js';
 
 const log = createLogger('api');
 
@@ -65,7 +68,8 @@ export async function buildApi(): Promise<FastifyInstance> {
   });
 
   app.addHook('preHandler', async (request) => {
-    if (request.url.startsWith('/api/health') || request.url.startsWith('/api/config')) return;
+    // Файл из блока «Файл» открывается во внешнем браузере, где нет входа через MAX: доступ — по случайному id
+    if (request.url.startsWith('/api/health') || request.url.startsWith('/api/config') || request.url.startsWith('/api/files/')) return;
     request.actor = await authenticate(request);
   });
 
@@ -78,6 +82,9 @@ export async function buildApi(): Promise<FastifyInstance> {
   registerCommonRoutes(app);
   registerHandbookRoutes(app);
   registerHandbookEditorRoutes(app);
+  registerUniversityRoutes(app);
+  registerPlatformRoutes(app);
+  registerFileRoutes(app);
 
   app.setNotFoundHandler((request, reply) => reply.status(404).send({ error: { code: 'not_found', message: `Маршрут ${request.method} ${request.url} не найден` } }));
   return app;

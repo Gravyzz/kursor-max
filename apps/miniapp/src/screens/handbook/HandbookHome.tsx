@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useLayoutEffect, useState } from 'react';
 import { Button } from '@maxhub/max-ui';
 import { useHandbook } from './context';
 import { api } from '../../lib/api';
@@ -16,12 +16,32 @@ import { SearchField } from './HandbookSearch';
 import { sectionIcon, sectionProgress, sectionTone } from './HandbookContents';
 
 /** Главная показывает реальные данные читателя; полный список разделов — в отдельном экране. */
+/**
+ * Фото главной тянется до низа шапки, сколько бы плашек над ней ни было: демо, «Кабинет университета»,
+ * «Назад: Редакция» и предпросмотр. Раньше высота фото была постоянной, и заголовок съезжал с него.
+ */
+function useHeroFit() {
+  const [node, setNode] = useState<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    if (!node) return undefined;
+    const update = () => node.style.setProperty('--hero-bottom', `${node.offsetTop + node.offsetHeight}px`);
+    update();
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(update);
+    observer.observe(node);
+    if (node.parentElement) observer.observe(node.parentElement);
+    return () => observer.disconnect();
+  }, [node]);
+  return setNode;
+}
+
 export function HandbookHome() {
   const hb = useHandbook();
   const theme = useTheme();
   const { data, error, loading, reload, setData } = hb.home;
   const [query, setQuery] = useState('');
   const [reading, setReading] = useState<string[]>([]);
+  const heroRef = useHeroFit();
   if (loading && !data) return <Skeletons count={4} />;
   if (error && !data) return <ErrorState error={error} onRetry={reload} />;
   if (!data) return null;
@@ -54,7 +74,7 @@ export function HandbookHome() {
 
   return (
     <>
-      <header className="hb-hero hb-reader-hero">
+      <header ref={heroRef} className="hb-hero hb-reader-hero">
         <div className="hb-hero__top">
           <button type="button" className="hb-circle hb-reader-avatar" onClick={() => hb.nav.tab({ name: 'hb-profile' })} aria-label="О себе и настройки">
             {hb.user.photoUrl

@@ -7,7 +7,8 @@ import { dateOnly, num, plural, todayIso } from '../../lib/format';
 import { EmptyState, ErrorState, Pill, SectionTitle, Sheet, Skeletons } from '../../components/ui';
 import { BrandMark, Icon } from '../../components/icons';
 import { SECTION_ICONS, sectionIcon, sectionTone } from './HandbookContents';
-import { QuestionsInbox } from './HandbookAnalytics';
+import { SHARED_STATE } from './SharedCards';
+import { StatusGuideSheet, notHelpfulPercent, ratingAttention, reviewDue } from './StatusGuide';
 
 interface EditorPage {
   id: string;
@@ -21,12 +22,46 @@ interface EditorPage {
   views: number;
   helpful: number;
   not_helpful: number;
+  /** Оценки после последней публикации — по ним ставится отметка «не помогла». */
+  recent_helpful?: number;
+  recent_not_helpful?: number;
+  owner_unit?: string | null;
+  owner_name?: string | null;
+  /** Своя версия общей страницы университета. */
+  inherited_from?: string | null;
+  /** Общую страницу обновили после того, как своя версия сверена с ней. */
+  base_behind?: boolean;
+  /** Общая страница только для выбранных факультетов. */
+  scoped?: boolean;
+}
+
+interface SharedRow {
+  id: string;
+  sectionSlug: string;
+  sectionTitle: string;
+  sectionEmoji: string;
+  sectionPosition: number;
+  title: string;
+  ownerUnit: string | null;
+  reviewAt: string | null;
+  overdue: boolean;
+  relation: 'inherit' | 'supplement' | 'override';
+  supplementDraft: boolean;
+  /** Редактор отправил уточнение на публикацию. */
+  supplementReview?: boolean;
+  overridePageId: string | null;
+  overrideStatus: string | null;
+  overrideBehind: boolean;
 }
 
 interface Structure {
-  handbook: { id: string; slug: string; title: string; emoji: string };
+  handbook: { id: string; slug: string; title: string; emoji: string; isBase?: boolean; hasBase?: boolean };
   role: 'admin' | 'editor';
   sections: Array<{ id: string; slug: string; title: string; emoji: string; visible: boolean; pages: EditorPage[] }>;
+  /** Общие страницы университета над справочником факультета. */
+  shared?: SharedRow[];
+  /** Для общей базы: кто показывает страницу. */
+  usage?: Record<string, { faculties: number; supplements: number; overrides: number; behind: number }>;
 }
 
 export interface EditorAnnouncement {
@@ -59,21 +94,15 @@ const STATUS: Record<EditorPage['status'], { label: string; tone: 'ok' | 'warn' 
   archived: { label: 'В архиве', tone: 'neutral' },
 };
 
-type EditorTab = 'pages' | 'questions' | 'announcements';
-type PageFilter = 'attention' | 'all' | 'review' | 'draft' | 'published' | 'archived';
-/** Доля «не помогла» среди оценок страницы. */
-const notHelpfulShare = (page: EditorPage) => page.not_helpful / Math.max(1, page.helpful + page.not_helpful);
-/**
- * Страница требует внимания по оценкам, только если это заметная доля, а не абсолютное число:
- * четверть оценок «не помогла» (от 5 оценок) или много жалоб при доле от 20 %.
- * Иначе метку получает почти каждая популярная страница, и она перестаёт что-то значить.
- */
-export const lowRated = (page: Pick<EditorPage, 'helpful' | 'not_helpful'>) => {
-  const votes = page.helpful + page.not_helpful;
-  const share = page.not_helpful / Math.max(1, votes);
-  return votes >= 5 && (share >= 0.25 || (page.not_helpful >= 10 && share >= 0.2));
-};
+type EditorTab = 'pages' | 'announcements';
+type PageFilter = 'attention' | 'all' | 'review' | 'draft' | 'published' | 'archived' | 'shared' | 'overrides';
+/** Оценки после последней публикации: исправленная и опубликованная страница теряет отметку «не помогла». */
+const recent = (page: EditorPage) => ({ helpful: page.recent_helpful ?? page.helpful, notHelpful: page.recent_not_helpful ?? page.not_helpful });
+const lowRated = (page: EditorPage) => ratingAttention(recent(page).helpful, recent(page).notHelpful);
 const FILTERS: Array<[PageFilter, string]> = [['all', 'Все'], ['attention', 'Требует внимания'], ['review', 'На проверке'], ['draft', 'В работе'], ['published', 'Опубликованы'], ['archived', 'Архив']];
+/** Общая база: фильтры по ответственности и тому, как страницу используют факультеты. */
+const BASE_FILTERS: Array<[PageFilter, string]> = [['all', 'Все'], ['attention', 'Пора проверить'], ['review', 'На согласовании'], ['draft', 'В работе'], ['overrides', 'Есть свои версии'], ['archived', 'Архив']];
+const facultiesWord = (n: number) => `${n} ${plural(n, 'факультет', 'факультета', 'факультетов')}`;
 /**
  * Вкладка, фильтр и свёрнутые разделы по справочнику. Экран монтируется заново после «Назад»
  * со страницы или из аналитики — без этого возвращались «Все» и «Страницы», а прокрутка
@@ -99,6 +128,8 @@ export function HandbookEditor() {
   const [sectionSummary, setSectionSummary] = useState('');
   const [sectionBusy, setSectionBusy] = useState(false);
   const [announcing, setAnnouncing] = useState<EditorAnnouncement | 'new' | null>(null);
+  const [guide, setGuide] = useState(false);
+  const [query, setQuery] = useState('');
   const announcements = useLoad(
     (signal) => data?.role === 'admin'
       ? api<{ announcements: EditorAnnouncement[] }>(hb.url('/api/handbook-editor/announcements'), { signal })
@@ -146,38 +177,58 @@ export function HandbookEditor() {
     finally { setSectionBusy(false); }
   };
   const today = todayIso();
-  const stale = (page: EditorPage) => page.status === 'published' && (!page.checked_at || Date.parse(page.checked_at) < Date.now() - 180 * 86_400_000 || Boolean(page.review_at && page.review_at.slice(0, 10) <= today));
+  const isAdmin = data.role === 'admin';
+  const stale = (page: EditorPage) => reviewDue({ status: page.status, checkedAt: page.checked_at, reviewAt: page.review_at });
+  // «На проверке» — задача администратора: у редактора это ожидание, а не проблема, которую он должен решить
+  const waitsForMe = (page: EditorPage) => page.status === 'review' && isAdmin;
   // Отмечаем по доле жалоб, а сортируем по их числу: наверху — страница, которая подвела больше всего студентов
-  const attention = (page: EditorPage) => page.status !== 'archived' && (lowRated(page) || stale(page) || page.status === 'review');
-  const priority = (page: EditorPage) => page.status === 'archived' ? -1 : lowRated(page) ? 4 + page.not_helpful : page.status === 'review' ? 3 : stale(page) ? 2 : page.status === 'draft' ? 1 : 0;
+  // Правки опубликованной страницы, которые никто не опубликовал: студенты видят старую версию — это легко забыть
+  const unpublished = (page: EditorPage) => page.status === 'published' && page.has_draft;
+  const attention = (page: EditorPage) => page.status !== 'archived' && (lowRated(page) || stale(page) || waitsForMe(page) || unpublished(page));
+  const priority = (page: EditorPage) => page.status === 'archived' ? -1 : lowRated(page) ? 4 + recent(page).notHelpful : waitsForMe(page) ? 3 : unpublished(page) || stale(page) ? 2 : page.status === 'draft' || page.status === 'review' ? 1 : 0;
+  const reviewSupplements = !data.handbook.isBase ? (data.shared ?? []).filter((row) => row.supplementReview).length : 0;
   const pages = data.sections.flatMap((section) => section.pages);
-  const matches = (page: EditorPage) => filter === 'all' || (filter === 'attention' ? attention(page) : filter === 'draft'
+  const isBase = Boolean(data.handbook.isBase);
+  const usage = data.usage ?? {};
+  const shared = data.shared ?? [];
+  const filters = isBase ? BASE_FILTERS : data.handbook.hasBase ? [FILTERS[0]!, ['shared', 'Из общей базы'] as [PageFilter, string], ...FILTERS.slice(1)] : FILTERS;
+  const needle = query.trim().toLowerCase();
+  // Поиск по названиям — чтобы найти страницу для правки; читательский поиск — в «Просмотре»
+  const activeFilter = needle ? 'all' : filters.some(([value]) => value === filter) ? filter : 'all';
+  const found = (title: string) => !needle || title.toLowerCase().includes(needle);
+  const inFilter = (page: EditorPage, value: PageFilter) => value === 'all' || (value === 'overrides' ? (usage[page.id]?.overrides ?? 0) > 0 : value === 'attention' ? attention(page) : value === 'draft'
     ? page.status !== 'archived' && (page.status === 'draft' || page.status === 'review' || page.has_draft)
-    : page.status === filter);
-  const sections = data.sections.map((section) => ({ ...section, pages: section.pages.filter(matches).sort((a, b) => priority(b) - priority(a)) }))
-    .filter((section) => filter === 'all' || section.pages.length > 0)
+    : page.status === value);
+  const matches = (page: EditorPage) => found(page.title) && inFilter(page, activeFilter);
+  // Сколько страниц в каждом фильтре — видно, куда смотреть, ещё до нажатия
+  const filterCount = (value: PageFilter) => value === 'shared' ? shared.length : pages.filter((page) => inFilter(page, value)).length;
+  const sections = activeFilter === 'shared' ? [] : data.sections.map((section) => ({ ...section, pages: section.pages.filter(matches).sort((a, b) => priority(b) - priority(a)) }))
+    .filter((section) => (activeFilter === 'all' && !needle) || section.pages.length > 0)
     .sort((a, b) => Math.max(0, ...b.pages.map(priority)) - Math.max(0, ...a.pages.map(priority)));
-  const tabs: Array<[EditorTab, string]> = [['pages', 'Страницы'], ['questions', 'Вопросы'], ...(data.role === 'admin' ? [['announcements', 'Объявления'] as [EditorTab, string]] : [])];
+  // «Вопросы» студентов — отдельная вкладка нижнего меню команды, здесь их не дублируем
+  const tabs: Array<[EditorTab, string]> = [['pages', 'Страницы'], ...(data.role === 'admin' ? [['announcements', 'Объявления'] as [EditorTab, string]] : [])];
   // Запомненная вкладка «Объявления» после смены роли на редактора недоступна — показываем страницы
   const shown = tabs.some(([value]) => value === tab) ? tab : 'pages';
 
   return (
     <>
       <div className="hb-page__head hb-team-heading">
-        <h1 className="hb-page__title">Редакция</h1>
-        <button type="button" className="hb-circle" aria-label="Аналитика" onClick={() => hb.nav.push({ name: 'hb-analytics' })}><Icon name="chart" /></button>
+        <h1 className="hb-page__title">{isBase ? 'Общая база' : 'Редакция'}</h1>
+        {/* У общей базы нет своих читателей: поиск и вопросы студентов — в справочниках факультетов */}
+        {isBase ? null : <button type="button" className="hb-circle" aria-label="Аналитика" onClick={() => hb.nav.push({ name: 'hb-analytics' })}><Icon name="chart" /></button>}
       </div>
       <section className="card hb-editor-identity hb-editor-identity--compact">
-        <span className="hb-book-logo" aria-hidden="true"><BrandMark size={26} /></span>
-        <h2>{data.handbook.title}</h2>
-        <span className="small muted">{pages.some((page) => page.status === 'published') ? 'Есть опубликованные страницы' : 'Черновик справочника'}</span>
+        <span className="hb-book-logo" aria-hidden="true">{isBase ? <Icon name="layers" size={24} /> : <BrandMark size={26} />}</span>
+        <h2>{isBase ? 'Единые инструкции вуза' : data.handbook.title}</h2>
+        <span className="small muted">{isBase
+          ? 'Студенты видят их внутри справочника своего факультета'
+          : pages.some((page) => page.status === 'published') ? 'Есть опубликованные страницы' : 'Черновик справочника'}</span>
         <div className="hb-editor-actions">
-          <button type="button" className="hb-chip" onClick={() => hb.nav.push({ name: 'hb-home' })}><Icon name="book" size={18} />Предпросмотр</button>
-          <button type="button" className="hb-chip" onClick={() => hb.nav.push({ name: 'hb-team' })}><Icon name="team" size={18} />Команда</button>
-          <button type="button" className="hb-chip" onClick={() => hb.nav.push({ name: 'hb-handbooks' })}><Icon name="books" size={18} />Справочники</button>
+          <button type="button" className="hb-chip" onClick={() => hb.nav.push({ name: 'hb-team' })}><Icon name="team" size={18} />{isBase ? 'Команда базы' : 'Команда'}</button>
+          <button type="button" className="hb-chip" onClick={() => hb.nav.push({ name: 'hb-editor-deadlines' })}><Icon name="calendar" size={18} />Сроки для студентов</button>
         </div>
       </section>
-      <div className="hb-editor-tabs" role="tablist" aria-label="Редактор">
+      {tabs.length > 1 ? <div className="hb-editor-tabs" role="tablist" aria-label="Редактор">
         {tabs.map(([value, label], index) => (
           <button key={value} id={`editor-tab-${value}`} type="button" role="tab" aria-selected={shown === value}
             aria-controls={`editor-panel-${value}`} tabIndex={shown === value ? 0 : -1} onClick={() => setTab(value)}
@@ -189,13 +240,35 @@ export function HandbookEditor() {
               document.getElementById(`editor-tab-${tabs[next]![0]}`)?.focus();
             }}>{label}</button>
         ))}
-      </div>
+      </div> : null}
       <div role="tabpanel" id={`editor-panel-${shown}`} aria-labelledby={`editor-tab-${shown}`} className="stack--lg">
         {shown === 'pages' ? <>
-          <div className="hb-chips hb-editor-filters" role="group" aria-label="Статус страниц">
-            {FILTERS.map(([value, label]) => <button key={value} type="button" className={`hb-chip ${filter === value ? 'hb-chip--on' : ''}`} aria-pressed={filter === value} onClick={() => setFilter(value)}>{label}</button>)}
-          </div>
-          {sections.length === 0 ? <EmptyState icon="file" title="Страниц с таким статусом нет">Выберите другой фильтр, чтобы увидеть страницы справочника.</EmptyState> : null}
+          <label className="hb-editor-search">
+            <Icon name="search" size={18} />
+            <input className="hb-input" type="search" value={query} placeholder="Найти страницу по названию" aria-label="Найти страницу по названию" onChange={(event) => setQuery(event.target.value)} />
+          </label>
+          {needle ? null : <div className="hb-chips hb-editor-filters" role="group" aria-label="Статус страниц">
+            {filters.map(([value, label]) => <button key={value} type="button" className={`hb-chip ${activeFilter === value ? 'hb-chip--on' : ''} ${value === 'attention' && filterCount(value) ? 'hb-chip--alert' : ''}`} aria-pressed={activeFilter === value} onClick={() => setFilter(value)}>{label}<span className="hb-chip__n">{filterCount(value)}</span></button>)}
+          </div>}
+          <button type="button" className="linkbtn small hb-guide-link" onClick={() => setGuide(true)}><Icon name="info" size={16} />Что значат статусы и как их снять</button>
+          {needle && shared.some((row) => found(row.title)) ? <SharedList rows={shared.filter((row) => found(row.title))} isAdmin={isAdmin} onOpen={(row) => hb.nav.push(row.overridePageId ? { name: 'hb-editor-page', id: row.overridePageId } : { name: 'hb-shared-page', id: row.id })} /> : null}
+          {activeFilter === 'shared' ? <SharedList rows={shared} isAdmin={isAdmin} onOpen={(row) => hb.nav.push(row.overridePageId ? { name: 'hb-editor-page', id: row.overridePageId } : { name: 'hb-shared-page', id: row.id })} /> : null}
+          {activeFilter === 'all' && shared.length && !needle ? (
+            <button type="button" className="card hb-row hb-shared-entry" onClick={() => setFilter('shared')}>
+              <span className="hb-reader-round" aria-hidden="true"><Icon name="layers" /></span>
+              <span className="stack hb-reader-grow" style={{ gap: 2 }}>
+                <strong>Общие страницы университета · {shared.length}</strong>
+                <span className="small muted">Студенты уже видят их. Добавьте уточнение, если на факультете что-то иначе{shared.some((row) => row.overrideBehind) ? ' · есть своя версия, которую нужно сверить' : ''}</span>
+                {reviewSupplements ? <span className="hb-attention">{isAdmin
+                  ? `${reviewSupplements} ${plural(reviewSupplements, 'уточнение ждёт', 'уточнения ждут', 'уточнений ждут')} вашей публикации`
+                  : `${reviewSupplements} ${plural(reviewSupplements, 'уточнение ждёт', 'уточнения ждут', 'уточнений ждут')} публикации администратором`}</span> : null}
+              </span>
+              <Icon name="chevron" size={18} />
+            </button>
+          ) : null}
+          {sections.length === 0 && activeFilter !== 'shared' && !(needle && shared.some((row) => found(row.title))) ? (needle
+            ? <EmptyState icon="search" title="Таких страниц нет">Проверьте название или создайте страницу в нужном разделе.</EmptyState>
+            : <EmptyState icon="file" title="Страниц с таким статусом нет">Выберите другой фильтр, чтобы увидеть страницы справочника.</EmptyState>) : null}
           {sections.map((section) => <section key={section.id} className={`card hb-editor-section ${sectionTone(section)}`}>
             <div className="hb-editor-section-head">
               <button type="button" className="hb-section-toggle" aria-expanded={!collapsed.has(section.id)} aria-controls={`editor-section-${section.id}`} onClick={() => setCollapsed((current) => { const next = new Set(current); next.has(section.id) ? next.delete(section.id) : next.add(section.id); return next; })}>
@@ -204,18 +277,31 @@ export function HandbookEditor() {
               {data.role === 'admin' ? <button type="button" className="hb-circle" aria-label={`Настроить раздел «${section.title}»`} onClick={() => { setEditingSection(section.id); setSectionTitle(section.title); setSectionEmoji(section.emoji); setSectionSummary(''); setNewSection(true); }}><Icon name="settings" size={18} /></button> : null}
             </div>
             <div id={`editor-section-${section.id}`} hidden={collapsed.has(section.id)}>
-              {section.pages.map((page) => <button key={page.id} type="button" className="hb-editor-page-row hb-row" aria-label={`${page.title} · ${STATUS[page.status].label}${attention(page) ? ' · Требует внимания' : ''}`} onClick={() => hb.nav.push({ name: 'hb-editor-page', id: page.id })}>
+              {section.pages.map((page) => <button key={page.id} type="button" className="hb-editor-page-row hb-row" aria-label={`${page.title} · ${STATUS[page.status].label}${unpublished(page) ? ' · правки не опубликованы' : ''}${attention(page) ? ' · Требует внимания' : ''}`} onClick={() => hb.nav.push({ name: 'hb-editor-page', id: page.id })}>
                 <span className="hb-status-dot" data-status={attention(page) ? 'attention' : page.status} aria-hidden="true" />
                 <span className="stack hb-reader-grow"><strong>{page.title}</strong>
-                  <span className="small muted">{num(page.views)} {plural(page.views, 'просмотр', 'просмотра', 'просмотров')}{page.has_draft && page.status === 'published' ? ' · есть правки' : ''}{page.helpful + page.not_helpful ? ` · помогла ${page.helpful} из ${page.helpful + page.not_helpful}` : ''}</span>
-                  {attention(page) ? <span className="hb-attention">{lowRated(page) ? `Требует внимания · не помогла ${Math.round(notHelpfulShare(page) * 100)}%` : page.status === 'review' ? 'На проверке' : 'Пора перепроверить'}</span> : page.status !== 'published' ? <span className="small muted">{STATUS[page.status].label}</span> : null}
+                  {isBase
+                    ? <span className="small muted">{page.owner_unit ?? 'Ответственный не указан'}{page.review_at && page.status === 'published' ? ` · проверка до ${dateOnly(page.review_at.slice(0, 10))}` : ''}</span>
+                    : <span className="small muted">{num(page.views)} {plural(page.views, 'просмотр', 'просмотра', 'просмотров')}{page.helpful + page.not_helpful ? ` · помогла ${page.helpful} из ${page.helpful + page.not_helpful}` : ''}</span>}
+                  {isBase && usage[page.id] && page.status !== 'archived' ? <span className="hb-tags">
+                    <Pill tone="neutral">{page.scoped ? 'Только выбранные · ' : ''}видят {facultiesWord(usage[page.id]!.faculties)}</Pill>
+                    {usage[page.id]!.supplements ? <Pill tone={SHARED_STATE.supplement.tone}>{SHARED_STATE.supplement.label}: {usage[page.id]!.supplements}</Pill> : null}
+                    {usage[page.id]!.overrides - usage[page.id]!.behind > 0 ? <Pill tone={SHARED_STATE.override.tone}>{SHARED_STATE.override.label}: {usage[page.id]!.overrides - usage[page.id]!.behind}</Pill> : null}
+                    {usage[page.id]!.behind ? <Pill tone={SHARED_STATE.behind.tone}>Нужно сверить: {usage[page.id]!.behind}</Pill> : null}
+                  </span> : null}
+                  {page.inherited_from ? <span className="hb-tags"><Pill tone={page.base_behind ? SHARED_STATE.behind.tone : SHARED_STATE.override.tone}>{page.base_behind ? SHARED_STATE.behind.label : 'Своя версия общей страницы'}</Pill></span> : null}
+                  {unpublished(page) ? <span className="hb-unpublished"><Icon name="edit" size={14} />{isAdmin ? 'Правки не опубликованы — студенты видят старую версию' : 'Правки не отправлены — нажмите «На проверку»'}</span> : null}
+                  {attention(page) && !(unpublished(page) && !lowRated(page) && !waitsForMe(page) && !stale(page))
+                    ? <span className="hb-attention">{lowRated(page) ? `Требует внимания · не помогла ${notHelpfulPercent(recent(page).helpful, recent(page).notHelpful)}%` : waitsForMe(page) ? 'На проверке · ждёт вашей публикации' : isBase ? 'Пора проверить' : 'Пора перепроверить'}</span>
+                    : page.status === 'review' ? <span className="small muted">На проверке · ждёт администратора</span>
+                      : page.status !== 'published' ? <span className="small muted">{STATUS[page.status].label}</span> : null}
                 </span><Icon name="chevron" size={18} />
               </button>)}
               <button type="button" className="hb-add" onClick={() => { setTitle(''); setNewPage({ sectionId: section.id }); }}><Icon name="plus" size={18} />Новая страница</button>
             </div>
           </section>)}
           {data.role === 'admin' ? <Button variant="secondary" size="large" onClick={() => { setEditingSection(null); setSectionTitle(''); setSectionEmoji('📚'); setSectionSummary(''); setNewSection(true); }}><Icon name="plus" /> Новый раздел</Button> : null}
-        </> : shown === 'questions' ? <QuestionsInbox onAnswered={reload} /> : data.role === 'admin' ? <>
+        </> : data.role === 'admin' ? <>
           <Button variant="primary" size="large" onClick={() => setAnnouncing('new')}>Новое объявление</Button>
           {announcements.loading && !announcements.data ? <Skeletons count={2} /> : null}
           {announcements.error ? <ErrorState error={announcements.error} onRetry={announcements.reload} /> : null}
@@ -232,9 +318,10 @@ export function HandbookEditor() {
           })}
         </> : null}
       </div>
+      {guide ? <StatusGuideSheet onClose={() => setGuide(false)} isBase={isBase} hasBase={Boolean(data.handbook.hasBase)} isAdmin={isAdmin} /> : null}
       {newPage ? <Sheet title="Новая страница" onClose={() => setNewPage(null)} dirty={title.trim().length > 0 && !busy}>
         <label className="hb-field"><span className="hb-field__label">Название страницы</span>
-          <input className="hb-input" value={title} autoFocus maxLength={120} placeholder="Например: «Где распечатать документы»" onChange={(event) => setTitle(event.target.value)} />
+          <input className="hb-input" value={title} autoFocus maxLength={120} placeholder="Например: Где распечатать документы" onChange={(event) => setTitle(event.target.value)} />
           <span className="faint small">Пишите так, как студент спросил бы об этом.</span>
         </label>
         <Button variant="primary" size="large" loading={busy} disabled={busy || title.trim().length < 3} onClick={create}>Создать черновик</Button>
@@ -292,6 +379,13 @@ function AnnounceSheet({
   const missingPage = initial?.pageId && !linkable.some((group) => group.pages.some((page) => page.id === initial.pageId));
   const today = todayIso();
   const datesWrong = Boolean(startsOn && endsOn && endsOn < startsOn);
+  const titleLeft = 3 - title.trim().length;
+  const bodyLeft = 5 - body.trim().length;
+  const missing = [
+    ...(titleLeft > 0 ? [title.trim() ? `допишите заголовок — ещё ${titleLeft} ${plural(titleLeft, 'символ', 'символа', 'символов')}` : 'напишите заголовок (от 3 символов)'] : []),
+    ...(bodyLeft > 0 ? [body.trim() ? `допишите текст — ещё ${bodyLeft} ${plural(bodyLeft, 'символ', 'символа', 'символов')}` : 'напишите текст объявления (от 5 символов)'] : []),
+    ...(datesWrong ? ['исправьте даты: «до» раньше «с»'] : []),
+  ];
   // Дата «до» уже прошла: объявление сразу в архиве, а рассылка перед отправкой его пропустит
   const ended = Boolean(endsOn && endsOn < today);
   // Набранное не теряется от случайного касания подложки или системной «Назад»
@@ -352,8 +446,9 @@ function AnnounceSheet({
     }
     setBusy('delete');
     try {
-      await api(hb.url(`/api/handbook-editor/announcements/${initial.id}`), { method: 'DELETE' });
-      hb.toast('Объявление удалено');
+      const result = await api<{ retracted?: number }>(hb.url(`/api/handbook-editor/announcements/${initial.id}`), { method: 'DELETE' });
+      const n = result?.retracted ?? 0;
+      hb.toast(n > 0 ? `Объявление удалено. Бот уберёт его и из чата у ${n} ${plural(n, 'читателя', 'читателей', 'читателей')}` : 'Объявление удалено');
       onSaved();
       onClose();
     } catch (err) {
@@ -383,7 +478,7 @@ function AnnounceSheet({
     <Sheet title={editing ? 'Объявление' : 'Новое объявление'} onClose={onClose} dirty={dirty}>
       <label className="hb-field">
         <span className="hb-field__label">Заголовок</span>
-        <input className="hb-input" value={title} autoFocus={!editing} maxLength={120} placeholder="Заголовок: «Собрание первого курса»" onChange={(event) => setTitle(event.target.value)} />
+        <input className="hb-input" value={title} autoFocus={!editing} maxLength={120} placeholder="Например: «Собрание первого курса»" onChange={(event) => setTitle(event.target.value)} />
       </label>
       <label className="hb-field">
         <span className="hb-field__label">Текст объявления</span>
@@ -438,7 +533,7 @@ function AnnounceSheet({
       </div>
       {editing ? (
         <span className="faint small">
-          Прочитали: {initial.reads}. Изменения увидят на главной; повторно в чат объявление не уйдёт.
+          Прочитали: {initial.reads}. Изменения увидят на главной; повторно в чат объявление не уйдёт. Если удалить объявление, бот уберёт его и из чатов.
         </span>
       ) : (
         <label className="hb-check hb-check--row">
@@ -451,11 +546,13 @@ function AnnounceSheet({
         variant="primary"
         size="large"
         loading={busy === 'save'}
-        disabled={title.trim().length < 3 || body.trim().length < 5 || datesWrong || busy !== null}
+        disabled={missing.length > 0 || busy !== null}
         onClick={save}
       >
         {editing ? 'Сохранить' : 'Опубликовать'}
       </Button>
+      {/* Серая кнопка без объяснения непонятна: говорим, чего не хватает, — как у публикации страницы */}
+      {missing.length ? <span className="small hb-attention" role="status">{editing ? 'Чтобы сохранить' : 'Чтобы опубликовать'}: {missing.join('; ')}</span> : null}
       {editing ? (
         <Button variant={confirmDelete ? 'destructive' : 'secondary'} size="large" loading={busy === 'delete'} disabled={busy !== null} onClick={remove}>
           {confirmDelete ? 'Точно удалить? Нажмите ещё раз' : 'Удалить объявление'}
@@ -463,4 +560,46 @@ function AnnounceSheet({
       ) : null}
     </Sheet>
   );
+}
+
+/** Общие страницы университета в разделах факультета: как они показаны студентам этого факультета. */
+function SharedList({ rows, isAdmin, onOpen }: { rows: SharedRow[]; isAdmin: boolean; onOpen: (row: SharedRow) => void }) {
+  if (!rows.length) return <EmptyState icon="layers" title="Общих страниц пока нет">Когда университет опубликует единые инструкции, они появятся здесь и у студентов.</EmptyState>;
+  const groups = new Map<string, { title: string; position: number; rows: SharedRow[] }>();
+  for (const row of rows) {
+    const group = groups.get(row.sectionSlug) ?? { title: row.sectionTitle, position: row.sectionPosition, rows: [] };
+    group.rows.push(row);
+    groups.set(row.sectionSlug, group);
+  }
+  return <>
+    <section className="card hb-shared-note" role="note">
+      <span className="row" style={{ gap: 12 }}>
+        <span className="hb-reader-round" aria-hidden="true"><Icon name="layers" /></span>
+        <span className="small">Общие страницы ведёт университет: обновления приходят сами. Факультет может добавить уточнение или создать свою версию.</span>
+      </span>
+    </section>
+    {[...groups.entries()].sort((a, b) => a[1].position - b[1].position).map(([slug, group]) => (
+      <section key={slug} className="card hb-editor-section">
+        <div className="hb-editor-section-head"><span className="hb-section-toggle" style={{ cursor: 'default' }}><Icon name="layers" /><strong>{group.title}</strong><span className="small muted">{group.rows.length} {plural(group.rows.length, 'общая', 'общие', 'общих')}</span></span></div>
+        <div>
+          {group.rows.map((row) => (
+            <button key={row.id} type="button" className="hb-editor-page-row hb-row" onClick={() => onOpen(row)}
+              aria-label={`${row.title} · ${row.relation === 'override' ? 'своя версия' : row.relation === 'supplement' ? 'с уточнением' : 'общая'}`}>
+              {/* Красная точка — только то, что факультет может исправить сам: отставшая своя версия и уточнение на публикацию */}
+              <span className="hb-status-dot" data-status={row.overrideBehind || (row.supplementReview && isAdmin) ? 'attention' : 'published'} aria-hidden="true" />
+              <span className="stack hb-reader-grow"><strong>{row.title}</strong>
+                <span className="small muted">Общая страница университета{row.ownerUnit ? ` · ${row.ownerUnit}` : ''}{row.overdue ? ' · университет не подтвердил актуальность' : ''}</span>
+                {row.relation !== 'inherit' || row.supplementDraft || row.supplementReview ? <span className="hb-tags">
+                  {row.relation === 'supplement' ? <Pill tone={SHARED_STATE.supplement.tone}>{SHARED_STATE.supplement.label}</Pill> : null}
+                  {row.supplementReview ? <Pill tone="warn">{isAdmin ? 'Уточнение ждёт вашей публикации' : 'Уточнение ждёт публикации'}</Pill>
+                    : row.supplementDraft ? <Pill tone="neutral">{row.relation === 'supplement' ? 'Есть неопубликованные правки' : 'Черновик уточнения'}</Pill> : null}
+                  {row.relation === 'override' ? <Pill tone={row.overrideBehind ? SHARED_STATE.behind.tone : SHARED_STATE.override.tone}>{row.overrideBehind ? SHARED_STATE.behind.label : row.overrideStatus === 'draft' ? 'Своя версия · черновик' : SHARED_STATE.override.label}</Pill> : null}
+                </span> : null}
+              </span><Icon name="chevron" size={18} />
+            </button>
+          ))}
+        </div>
+      </section>
+    ))}
+  </>;
 }

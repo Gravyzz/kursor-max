@@ -207,7 +207,12 @@ html[data-theme='dark'], html[data-theme='dark'] body { background: #0d0a24; }
 /* Только цвет фона: сокращённое background стирало стрелку выпадающего списка .hb-select */
 .pd-app :is(.hb-input, .hb-textarea, .input, .textarea) { background-color: var(--pd-field); border-color: color-mix(in srgb, var(--pd-on-surface) 22%, transparent); }
 /* Подмес полупрозрачной поверхности осветлял подсказку до 4:1 на стекле — берём приглушённый цвет стекла как есть */
-.pd-app ::placeholder { color: var(--pd-muted); }
+.pd-app ::placeholder { color: color-mix(in srgb, var(--pd-muted) 60%, transparent); font-weight: 400; opacity: 1; }
+/* Поле всегда светлое днём и тёмное ночью — даже вне карточки (поиск в «Редакции» и «Общей базе» лежит прямо на фоне).
+   Поэтому текст и подсказка в поле — «чернила стекла», а не белый цвет фона: иначе белое по светлому не видно */
+.pd-app :is(.hb-input, .hb-textarea, .input, .textarea) { color: var(--pd-on-surface); }
+.pd-app :is(.hb-input, .hb-textarea, .input, .textarea)::placeholder { color: var(--pd-on-surface-muted); opacity: 0.8; }
+.pd-app .hb-editor-search svg { color: var(--pd-on-surface-muted); }
 
 /* ─── Док: стеклянная капсула, активная вкладка — градиент ──────────── */
 .pd-app .hb-dock { background: var(--pd-dock-bg); border-radius: 999px; box-shadow: var(--pd-glass-shadow); -webkit-backdrop-filter: blur(24px) saturate(1.35); backdrop-filter: blur(24px) saturate(1.35); padding: 6px; }
@@ -220,7 +225,8 @@ html[data-theme='dark'], html[data-theme='dark'] body { background: #0d0a24; }
 .pd-app[data-theme] .hb-reader-hero { position: static; display: flex; flex-direction: column; gap: 16px; min-height: 440px; }
 .pd-app .hb-reader-hero .hb-hero__intro { margin-top: auto; grid-template-columns: minmax(0, 1fr); padding: 0 4px; }
 .pd-app .hb-reader-hero .hb-cover {
-  position: absolute; top: 0; left: 0; right: 0; height: 560px; z-index: -1;
+  /* Высота — до низа шапки (--hero-bottom ставит главная) и чуть ниже: фото растворяется под поиском */
+  position: absolute; top: 0; left: 0; right: 0; height: calc(var(--hero-bottom, 544px) + 16px); z-index: -1;
   border-radius: 0; box-shadow: none; background-size: cover; background-position: center top;
   /* Фото растворяется в фоне к поиску — без жёсткой границы */
   -webkit-mask-image: linear-gradient(180deg, #000 76%, transparent 100%);
@@ -240,7 +246,6 @@ html[data-theme='dark'], html[data-theme='dark'] body { background: #0d0a24; }
 .pd-app .hb-reader-hero :is(.hb-hero__sub, .hb-reader-greeting) { color: rgba(255, 255, 255, 0.9); text-shadow: 0 1px 10px rgba(4, 8, 30, 0.6); }
 @media (max-width: 359px) {
   .pd-app[data-theme] .hb-reader-hero { min-height: 400px; }
-  .pd-app .hb-reader-hero .hb-cover { height: 510px; }
 }
 
 /* ─── Профиль: переключатели — отдельные капсулы ────────────────────── */
@@ -302,7 +307,8 @@ html[data-theme='dark'], html[data-theme='dark'] body { background: #0d0a24; }
   .pd-app .screen { max-width: 860px; }
   .pd-app .bottombar__inner { max-width: 860px; }
   .pd-app .hb-reader-hero .hb-cover {
-    left: 0; right: 0; top: 0; height: 440px; border-radius: 32px; overflow: hidden;
+    /* Карточка заканчивается под подписью, поиск садится на её нижний край */
+    left: 0; right: 0; top: 0; height: calc(var(--hero-bottom, 486px) - 46px); border-radius: 32px; overflow: hidden;
     background-position: center 42%; -webkit-mask-image: none; mask-image: none;
     box-shadow: 0 18px 50px rgba(6, 12, 40, 0.35);
   }

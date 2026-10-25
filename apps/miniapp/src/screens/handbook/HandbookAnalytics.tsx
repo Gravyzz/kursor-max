@@ -270,6 +270,16 @@ function QuestionRow({ question, onAnswer }: { question: Question; onAnswer: () 
   );
 }
 
+/** Вкладка команды «Вопросы»: вопросы студентов дежурному — отдельно от редакции, чтобы не терялись. */
+export function TeamQuestions() {
+  return <>
+    <div className="hb-page__head">
+      <h1 className="hb-page__title">Вопросы студентов</h1>
+    </div>
+    <QuestionsInbox />
+  </>;
+}
+
 /**
  * Входящие вопросы используют тот же серверный ответ и форму, что и аналитика.
  * onAnswered — ответ ушёл: у страницы из «Вопросов и ответов» появился черновик, редакции нужно обновить список.

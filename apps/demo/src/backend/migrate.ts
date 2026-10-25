@@ -6,6 +6,11 @@ import m004 from '../../../server/migrations/004_announcements.sql';
 import m005 from '../../../server/migrations/005_review_keeps_published.sql';
 import m006 from '../../../server/migrations/006_page_return.sql';
 import m007 from '../../../server/migrations/007_deadline_block_audience.sql';
+import m008 from '../../../server/migrations/008_university_layer.sql';
+import m009 from '../../../server/migrations/009_platform_and_faculty_scope.sql';
+import m010 from '../../../server/migrations/010_status_actions.sql';
+import m011 from '../../../server/migrations/011_close_handbooks.sql';
+import m012 from '../../../server/migrations/012_files_and_retract.sql';
 import { pool } from './pool';
 
 const MIGRATIONS: Array<[string, string]> = [
@@ -16,6 +21,11 @@ const MIGRATIONS: Array<[string, string]> = [
   ['005_review_keeps_published.sql', m005],
   ['006_page_return.sql', m006],
   ['007_deadline_block_audience.sql', m007],
+  ['008_university_layer.sql', m008],
+  ['009_platform_and_faculty_scope.sql', m009],
+  ['010_status_actions.sql', m010],
+  ['011_close_handbooks.sql', m011],
+  ['012_files_and_retract.sql', m012],
 ];
 
 export async function migrate(): Promise<void> {

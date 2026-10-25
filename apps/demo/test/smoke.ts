@@ -81,7 +81,8 @@ const profile = await api('PATCH', '/api/handbook/profile', { course: 1, dorm: t
 const savedProfile = await api('GET', `/api/handbook?handbookId=${handbookId}`);
 check('профиль читателя: направление сохраняется и отображается', profile.status === 200 && savedProfile.body.profile.program === 'Прикладная информатика', savedProfile.body.profile);
 
-// 4. Бот: поиск в чате, «нет ответа» и вопрос дежурному
+// 4. Бот: поиск в чате, «нет ответа» и вопрос дежурному — его задаёт студент, деканат только отвечает
+await api('POST', '/api/demo/role', { role: 'dean' });
 await sendText('как получить справку');
 check('бот нашёл справку', /Справка об обучении/.test(lastBot()?.text ?? ''), lastBot());
 await sendText('есть ли военная кафедра');
@@ -89,7 +90,17 @@ check('бот честно говорит, что точного ответа н
 await pressButton('hb:q', 'Спросить дежурного');
 check('бот просит сформулировать вопрос', /Напишите вопрос/.test(lastBot()?.text ?? ''), lastBot());
 await sendText('Работает ли библиотека по субботам?');
-check('вопрос передан дежурному', /Передал дежурному/.test(lastBot()?.text ?? ''), lastBot());
+check('деканат не задаёт вопросы дежурному сам себе', /задают студенты/.test(lastBot()?.text ?? ''), lastBot());
+await api('POST', '/api/demo/role', { role: 'student' });
+await sendText('есть ли военная кафедра');
+await pressButton('hb:q', 'Спросить дежурного');
+await sendText('Работает ли библиотека по субботам?');
+check('вопрос студента передан дежурному', /Передал дежурному/.test(lastBot()?.text ?? ''), lastBot());
+const deanAsks = await api('POST', '/api/handbook/questions', { text: 'Вопрос от студента через API' });
+check('студент задаёт вопрос из мини-приложения', deanAsks.status === 200, deanAsks.body);
+await api('POST', '/api/demo/role', { role: 'dean' });
+const teamAsks = await api('POST', '/api/handbook/questions', { text: 'Вопрос деканата самому себе' });
+check('API: вопрос от команды — 403', teamAsks.status === 403, teamAsks.body);
 
 // 5. Редактор: аналитика, ответ на вопрос → уведомление в чат
 const analytics = await api('GET', `/api/handbook-editor/analytics?handbookId=${handbookId}`, undefined, { 'x-person-id': dean.id });
@@ -187,6 +198,50 @@ const editorStructure = await api('GET', `/api/handbook-editor/structure?handboo
 check('создатель справочника добавляет свой раздел', editorSection.status === 200 && editorStructure.body.sections.some((item: { title: string }) => item.title === 'Практика и стажировки'), editorStructure.body.sections);
 await api('POST', '/api/demo/role', { role: 'dean' });
 
+// 9b. Университет: общая база, обновление у двух факультетов, уточнения, подключение факультета
+check('в демо есть роль «Университет»', roleButtons.includes('Университет'), roleButtons);
+const asUni = await api('POST', '/api/demo/role', { role: 'university' });
+const uniMe = await api('GET', '/api/me');
+check('университет: кабинет в /api/me', asUni.status === 200 && uniMe.body.university?.name === 'Модельный университет', uniMe.body.university);
+const overview = await api('GET', '/api/university');
+check('обзор: два факультета на общей базе', overview.status === 200 && overview.body.faculties.length === 2, overview.body.faculties);
+check('обзор: просроченная проверка видна', overview.body.attention?.due?.some((p: any) => p.overdue), overview.body.attention);
+check('обзор: отставшая своя версия ЭФ', overview.body.attention?.behind?.some((p: any) => p.shortName === 'ЭФ'), overview.body.attention);
+const baseId: string = overview.body.baseHandbookId;
+const baseStructure = await api('GET', `/api/handbook-editor/structure?handbookId=${baseId}`);
+check('общая база открывается в редакторе', baseStructure.status === 200 && baseStructure.body.handbook?.isBase === true, baseStructure.body.handbook);
+const basePage = baseStructure.body.sections.flatMap((s: any) => s.pages).find((p: any) => p.title === 'Справка об обучении');
+const baseUrl = `/api/handbook-editor/pages/${basePage?.id}?handbookId=${baseId}`;
+const impact = await api('GET', `/api/handbook-editor/pages/${basePage?.id}/impact?handbookId=${baseId}`);
+check('влияние: справку используют ИИТ и ЭФ', [...new Set(impact.body.faculties?.map((f: any) => f.shortName))].sort().join() === 'ИИТ,ЭФ', impact.body);
+const baseOpened = await api('GET', baseUrl);
+const baseBlocks = structuredClone(baseOpened.body.page.blocks);
+const step = baseBlocks.find((b: any) => b.id === 'u2');
+if (step?.items?.[0]) step.items[0].text = 'Оставить заявку в личном кабинете: «Сервисы» → «Справки»';
+const baseSaved = await api('PATCH', baseUrl, { blocks: baseBlocks, baseUpdatedAt: baseOpened.body.updatedAt });
+const basePublished = await api('POST', `/api/handbook-editor/pages/${basePage?.id}/publish?handbookId=${baseId}`, { baseUpdatedAt: baseSaved.body.updatedAt });
+check('публикация общей страницы: затронуты два факультета', basePublished.status === 200 && basePublished.body.affected?.faculties === 2, basePublished.body);
+const faculties = await api('GET', '/api/university/faculties');
+const iitFaculty = faculties.body.faculties?.find((f: any) => f.shortName === 'ИИТ');
+const efFaculty = faculties.body.faculties?.find((f: any) => f.shortName === 'ЭФ');
+const uniCreated = await api('POST', '/api/university/faculties', { name: 'Юридический институт', shortName: 'ЮИ', adminFullName: 'Морозова Ирина Олеговна' });
+check('подключение ЮИ: общие страницы не копируются, есть ссылка администратору', uniCreated.status === 200 && uniCreated.body.inherited === true && uniCreated.body.skipped > 0 && /inv_/.test(uniCreated.body.link ?? ''), uniCreated.body);
+const afterCreate = await api('GET', '/api/university/faculties');
+check('ЮИ в списке факультетов', afterCreate.body.faculties?.some((f: any) => f.shortName === 'ЮИ'), afterCreate.body.faculties?.map((f: any) => f.shortName));
+
+await api('POST', '/api/demo/role', { role: 'student' });
+const readSpravka = async (handbook: string) => {
+  const found = await api('GET', `/api/handbook/search?handbookId=${handbook}&q=${encodeURIComponent('справка об обучении')}`);
+  const hit = found.body.hits?.find((h: any) => h.title === 'Справка об обучении');
+  return (await api('GET', `/api/handbook/pages/${hit?.pageId}?handbookId=${handbook}`)).body.page;
+};
+const iitPage = await readSpravka(iitFaculty?.handbook?.id);
+const efPage = await readSpravka(efFaculty?.handbook?.id);
+const blocksText = (page: any) => JSON.stringify(page?.blocks ?? []);
+check('студент ИИТ: новая общая версия и каб. 214', /«Сервисы» → «Справки»/.test(blocksText(iitPage)) && /214/.test(blocksText(iitPage)) && iitPage?.source === 'university+local', { source: iitPage?.source });
+check('студент ЭФ: новая общая версия и каб. 305, без 214', /«Сервисы» → «Справки»/.test(blocksText(efPage)) && /305/.test(blocksText(efPage)) && !/214/.test(blocksText(efPage)), { source: efPage?.source });
+await api('POST', '/api/demo/role', { role: 'dean' });
+
 // 10. Диплинки
 setLaunchParam(`hbp_${pageId}`);
 const deep = await api('GET', '/api/handbook');
@@ -201,8 +256,10 @@ const badPage = await api('GET', '/api/handbook/pages/не-uuid');
 check('невалидный id: 400 по-русски', badPage.status === 400 && /Некорректный идентификатор/.test(badPage.body.error.message), badPage.body);
 const shortQuestion = await api('POST', '/api/handbook/questions', { text: 'а?' });
 check('короткий вопрос: 400', shortQuestion.status === 400, shortQuestion.body);
+await api('POST', '/api/demo/role', { role: 'student' });
 const nulQuestion = await api('POST', '/api/handbook/questions', { text: 'Где деканат\u0000 находится?' });
 check('нулевой байт во входе вырезается', nulQuestion.status === 200, nulQuestion.body);
+await api('POST', '/api/demo/role', { role: 'dean' });
 const brokenJson = await handleApi('POST', '/api/handbook/questions', {}, '{не json');
 check('битый JSON: 400 по-русски', brokenJson.status === 400 && /Не удалось прочитать/.test((brokenJson.body as any).error.message), brokenJson.body);
 
